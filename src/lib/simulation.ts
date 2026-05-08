@@ -8,22 +8,32 @@
 //     bottom (j=0) to top (j=Nz-1), Nz = layers.length * nzPerLayer.
 //   - Storage is row-major in axial (idx = j*Nr + i).
 //
-// Energy balance per cell, explicit forward Euler:
-//   ρ c V (T_new - T)/dt = Σ_faces (A_face / R_face) (T_neighbor - T)
-//                        + Q_heater   (z=0, only on annular ring overlap)
-//                        - Q_top      (top face: h_conv + linearised radiation)
+// Energy balance per cell, Crank–Nicolson via Peaceman–Rachford ADI:
+//   half-step 1, implicit in r, explicit in z:
+//     (ρcV/(dt/2) − L_r) T*    = ρcV/(dt/2) T_n   + L_z T_n + S
+//   half-step 2, implicit in z, explicit in r:
+//     (ρcV/(dt/2) − L_z) T_n+1 = ρcV/(dt/2) T*    + L_r T* + S
+// Each sweep is a tridiagonal system (Thomas algorithm). Combined the scheme is
+// 2nd-order in time and unconditionally stable. Radiation is linearised at T_n:
+//   hRad(T_n) = ε σ (T_n² + T_amb²)(T_n + T_amb), so q″ = hRad·(T − T_amb).
+// L_r = radial conduction (rim is adiabatic — no Robin term).
+// L_z = axial conduction + Robin top-loss term −H_top·T (with constant +H_top·T_amb
+//       moved into S).
+// S   = constant sources: heater q″ on the bottom-face annular ring (gated by the
+//       hysteresis state, frozen at the start of the step) and the +H_top·T_amb
+//       constant from the linearised top loss.
 // Boundary conditions:
 //   r=0     : symmetry (face area is zero — automatic).
 //   r=R     : adiabatic (no flux on rim).
 //   z=0     : heater q″ on the annular ring [D/2−t/2, D/2+t/2] (clamped to pan);
 //             adiabatic everywhere else on the bottom face.
-//   z=H     : convective h_conv·(T−T_amb) + radiative ε·σ·(T⁴−T_amb⁴), with ε
-//             taken from the topmost material layer.
+//   z=H     : convective h_conv·(T−T_amb) + linearised radiative hRad(T_n)·(T−T_amb).
 // Face resistance (per unit area, m²K/W):
 //   - Radial face within a layer: R = dr / k_layer
 //   - Axial face between cells j and j+1: R = dz_j/(2 k_j) + dz_{j+1}/(2 k_{j+1})
 //
-// Stability: dt = 0.4 / (2 α_max (1/dr² + 1/dz_min²)).
+// Time step: dt is a user parameter (Solver tab). CN is unconditionally stable so
+// dt is bounded only by accuracy, not stability.
 //
 // Energy book-keeping. The discrete scheme is exactly conservative (interior
 // fluxes telescope), so for the global balance only boundary terms matter:
@@ -56,6 +66,7 @@ export interface SimParams {
   initialTemp: number; // K
   nr: number; // number of radial cells
   nzPerLayer: number; // axial cells per material layer (>=1)
+  dt: number; // s — Crank–Nicolson time step (user-controlled, accuracy-bounded)
 }
 
 export interface SimState {
@@ -84,7 +95,20 @@ export interface SimState {
   H: number; // total thickness (m)
   qDensity: number; // heater W/m²
   epsTop: number; // emissivity of top surface (from topmost material layer)
-  scratchTnew: Float64Array; // reused buffer for explicit update
+  // CN diagnostics (mesh+material+dt only — known at setup)
+  maxFoR: number; // max α·dt/dr² across cells
+  maxFoZ: number; // max α·dt/dz² across cells
+  // ADI scratch buffers
+  Tstar: Float64Array; // length Nr*Nz — intermediate field after half-step 1
+  hTopBuf: Float64Array; // length Nr — H_top[i] = (h_conv + hRad(T_n))·ringArea[i]
+  TnTopBuf: Float64Array; // length Nr — T_n at top row, snapshot for energy tally
+  // Tridiagonal scratches (sized to max(Nr, Nz))
+  tdSub: Float64Array;
+  tdDiag: Float64Array;
+  tdSup: Float64Array;
+  tdRhs: Float64Array;
+  tdSol: Float64Array;
+  tdCprime: Float64Array;
   heaterOn: boolean; // hysteresis state — flipped per substep based on T_center_top
 
   // Energy diagnostics
@@ -105,6 +129,7 @@ export interface HistorySample {
   Tcenter: number; // K — top-surface center cell temperature
   Tmax: number; // K — max top-surface temperature
   Tmin: number; // K — min top-surface temperature
+  maxDeltaT: number; // K — max |T_{n+1} − T_n| over any cell in this step (peak across substeps)
 }
 
 export function effectiveProps(layers: Layer[]) {
@@ -185,15 +210,21 @@ export function initSim(params: SimParams): SimState {
   const topLayer = layers[layers.length - 1];
   const epsTop = lookupEmissivity(topLayer);
 
-  // ---- Stability-bound dt for explicit FV ------------------------------
-  let alphaMax = 0;
-  let dzMin = Infinity;
+  // CN is unconditionally stable — dt is the user-supplied accuracy step.
+  const dt = Math.max(1e-6, params.dt);
+  const tdMax = Math.max(nr, Nz);
+
+  // Per-cell Fourier numbers. Pure diffusion has no advective CFL; Fo gates
+  // CN accuracy and ringing tendency, not stability.
+  let maxFoR = 0;
+  let maxFoZ = 0;
   for (let j = 0; j < Nz; j++) {
-    alphaMax = Math.max(alphaMax, k[j] / (rho[j] * cp[j]));
-    if (dz[j] < dzMin) dzMin = dz[j];
+    const alpha = k[j] / (rho[j] * cp[j]);
+    const FoR = (alpha * dt) / (dr * dr);
+    const FoZ = (alpha * dt) / (dz[j] * dz[j]);
+    if (FoR > maxFoR) maxFoR = FoR;
+    if (FoZ > maxFoZ) maxFoZ = FoZ;
   }
-  const invStab = 2 * alphaMax * (1 / (dr * dr) + 1 / (dzMin * dzMin));
-  const dt = 0.4 / Math.max(invStab, 1e-12);
 
   return {
     T,
@@ -218,7 +249,17 @@ export function initSim(params: SimParams): SimState {
     H,
     qDensity,
     epsTop,
-    scratchTnew: new Float64Array(nr * Nz),
+    maxFoR,
+    maxFoZ,
+    Tstar: new Float64Array(nr * Nz),
+    hTopBuf: new Float64Array(nr),
+    TnTopBuf: new Float64Array(nr),
+    tdSub: new Float64Array(tdMax),
+    tdDiag: new Float64Array(tdMax),
+    tdSup: new Float64Array(tdMax),
+    tdRhs: new Float64Array(tdMax),
+    tdSol: new Float64Array(tdMax),
+    tdCprime: new Float64Array(tdMax),
     heaterOn: true,
 
     eInput: 0,
@@ -235,6 +276,7 @@ export function initSim(params: SimParams): SimState {
         Tcenter: initialTemp,
         Tmax: initialTemp,
         Tmin: initialTemp,
+        maxDeltaT: 0,
       },
     ],
     historyMax: 4000,
@@ -265,85 +307,154 @@ export function step(state: SimState, substeps = 1) {
     axialFaceR,
     qDensity,
     epsTop,
-    scratchTnew,
+    Tstar,
+    hTopBuf,
+    TnTopBuf,
+    tdSub,
+    tdDiag,
+    tdSup,
+    tdRhs,
+    tdSol,
+    tdCprime,
   } = state;
-  const Tnew = scratchTnew;
   const Tamb = params.ambient;
   const hConv = params.hConv;
   const heaterPower = params.heaterPower;
-  // Normalize setpoints in case the user inverted them (low > high) so
-  // hysteresis still works rather than getting stuck.
   const setHigh = Math.max(params.setpointHigh, params.setpointLow);
   const setLow = Math.min(params.setpointHigh, params.setpointLow);
   const TWO_PI = 2 * Math.PI;
   const topRowOff = (Nz - 1) * Nr;
+  const halfDt = dt * 0.5;
 
   let eInput = state.eInput;
   let eLossConv = state.eLossConv;
   let eLossRad = state.eLossRad;
   let heaterOn = state.heaterOn;
+  let maxDeltaT = 0; // peak |T_{n+1} − T_n| across all substeps + cells in this call
 
   for (let s = 0; s < substeps; s++) {
-    // Hysteresis on center-of-top-surface temperature
+    // Hysteresis decision frozen for the whole step (T at its start).
     const Tcenter = T2D[topRowOff];
     if (heaterOn && Tcenter >= setHigh) heaterOn = false;
     else if (!heaterOn && Tcenter <= setLow) heaterOn = true;
     const heaterFactor = heaterOn ? 1 : 0;
 
+    // Linearise top-face radiation at T_n and snapshot T_n at the top row.
+    for (let i = 0; i < Nr; i++) {
+      const Tn = T2D[topRowOff + i];
+      const hRad = epsTop * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
+      hTopBuf[i] = (hConv + hRad) * ringArea[i]; // W/K
+      TnTopBuf[i] = Tn;
+    }
+
+    // ---- Half-step 1: implicit in r, explicit in z (one tridiag per row j) ----
     for (let j = 0; j < Nz; j++) {
       const kj = k[j];
       const dzj = dz[j];
-      const rcDz = rho[j] * cp[j] * dzj; // ρ c dz  (J/m²·K)
+      const rcDzj = rho[j] * cp[j] * dzj;
       const rowOff = j * Nr;
       const RbotR = j > 0 ? axialFaceR[j - 1] : 0;
       const RtopR = j < Nz - 1 ? axialFaceR[j] : 0;
       const isTop = j === Nz - 1;
+      const isBot = j === 0;
 
       for (let i = 0; i < Nr; i++) {
         const idx = rowOff + i;
-        const Tij = T2D[idx];
-        let Q = 0; // net heat in (W)
+        const A = ringArea[i];
+        const rhocV_dt2 = (rcDzj * A) / halfDt;
+        const Gin = i > 0 ? (kj * TWO_PI * rLeft[i] * dzj) / dr : 0;
+        const Gout = i < Nr - 1 ? (kj * TWO_PI * rRight[i] * dzj) / dr : 0;
 
-        // Radial inner face (between i-1 and i). At i=0 area is zero (axis).
-        if (i > 0) {
-          const A = TWO_PI * rLeft[i] * dzj;
-          Q += ((kj * A) / dr) * (T2D[idx - 1] - Tij);
-        }
-        // Radial outer face — adiabatic at the rim (i = Nr-1)
-        if (i < Nr - 1) {
-          const A = TWO_PI * rRight[i] * dzj;
-          Q += ((kj * A) / dr) * (T2D[idx + 1] - Tij);
-        }
+        tdSub[i] = -Gin;
+        tdSup[i] = -Gout;
+        tdDiag[i] = rhocV_dt2 + Gin + Gout;
 
-        // Axial bottom face
+        // RHS = ρcV/(dt/2)·T_n + (L_z T_n) + S
+        let rhs = rhocV_dt2 * T2D[idx];
         if (j > 0) {
-          Q += (ringArea[i] / RbotR) * (T2D[idx - Nr] - Tij);
-        } else {
-          // Pan bottom: heater on the annular ring (gated by hysteresis);
-          // adiabatic elsewhere.
-          if (heaterOn && heatedArea[i] > 0) {
-            Q += qDensity * heatedArea[i];
-          }
+          const Gbot = A / RbotR;
+          rhs += Gbot * (T2D[idx - Nr] - T2D[idx]);
         }
-
-        // Axial top face: convection + radiation (ε from top material layer)
-        if (!isTop) {
-          Q += (ringArea[i] / RtopR) * (T2D[idx + Nr] - Tij);
-        } else {
-          const hRad = epsTop * SIGMA * (Tij * Tij + Tamb * Tamb) * (Tij + Tamb);
-          const dT = Tij - Tamb;
-          const A = ringArea[i];
-          Q -= (hConv + hRad) * dT * A;
-          // Tally cumulative top-surface losses with the same flux that was applied
-          eLossConv += hConv * dT * A * dt;
-          eLossRad += hRad * dT * A * dt;
+        if (j < Nz - 1) {
+          const Gtop = A / RtopR;
+          rhs += Gtop * (T2D[idx + Nr] - T2D[idx]);
         }
-
-        // ρcV = (ρ c dz) · ringArea
-        Tnew[idx] = Tij + (dt * Q) / (rcDz * ringArea[i]);
+        if (isTop) {
+          // Robin: −H·T (linear) + H·T_amb (source)
+          rhs -= hTopBuf[i] * T2D[idx];
+          rhs += hTopBuf[i] * Tamb;
+        }
+        if (isBot && heaterOn && heatedArea[i] > 0) {
+          rhs += qDensity * heatedArea[i];
+        }
+        tdRhs[i] = rhs;
+      }
+      solveTridiag(tdSub, tdDiag, tdSup, tdRhs, tdSol, tdCprime, Nr);
+      for (let i = 0; i < Nr; i++) {
+        Tstar[rowOff + i] = tdSol[i];
       }
     }
-    T2D.set(Tnew);
+
+    // ---- Half-step 2: implicit in z, explicit in r (one tridiag per column i) ----
+    for (let i = 0; i < Nr; i++) {
+      const A = ringArea[i];
+      for (let j = 0; j < Nz; j++) {
+        const idx = j * Nr + i;
+        const dzj = dz[j];
+        const kj = k[j];
+        const rcDzj = rho[j] * cp[j] * dzj;
+        const rhocV_dt2 = (rcDzj * A) / halfDt;
+        const Gbot = j > 0 ? A / axialFaceR[j - 1] : 0;
+        const Gtop = j < Nz - 1 ? A / axialFaceR[j] : 0;
+        const isTop = j === Nz - 1;
+        const isBot = j === 0;
+
+        tdSub[j] = -Gbot;
+        tdSup[j] = -Gtop;
+        let diag = rhocV_dt2 + Gbot + Gtop;
+        if (isTop) diag += hTopBuf[i];
+        tdDiag[j] = diag;
+
+        // RHS = ρcV/(dt/2)·T* + (L_r T*) + S
+        let rhs = rhocV_dt2 * Tstar[idx];
+        if (i > 0) {
+          const Gin = (kj * TWO_PI * rLeft[i] * dzj) / dr;
+          rhs += Gin * (Tstar[idx - 1] - Tstar[idx]);
+        }
+        if (i < Nr - 1) {
+          const Gout = (kj * TWO_PI * rRight[i] * dzj) / dr;
+          rhs += Gout * (Tstar[idx + 1] - Tstar[idx]);
+        }
+        if (isTop) rhs += hTopBuf[i] * Tamb;
+        if (isBot && heaterOn && heatedArea[i] > 0) rhs += qDensity * heatedArea[i];
+
+        tdRhs[j] = rhs;
+      }
+      solveTridiag(tdSub, tdDiag, tdSup, tdRhs, tdSol, tdCprime, Nz);
+      // T2D still holds T_n for this column — capture |T_{n+1} − T_n| then overwrite
+      for (let j = 0; j < Nz; j++) {
+        const idx = j * Nr + i;
+        const diff = tdSol[j] - T2D[idx];
+        const ad = diff < 0 ? -diff : diff;
+        if (ad > maxDeltaT) maxDeltaT = ad;
+        T2D[idx] = tdSol[j];
+      }
+    }
+
+    // ---- Energy tally (trapezoidal on top surface, exact for the applied flux) ----
+    // PR-ADI applies top-loss flux as ½(loss(T_n) + loss(T_{n+1})) over the step,
+    // with hRad frozen at T_n inside hTopBuf[i] = (h_conv + hRad)·A.
+    for (let i = 0; i < Nr; i++) {
+      const Tn = TnTopBuf[i];
+      const Tnp1 = T2D[topRowOff + i];
+      const Tavg = 0.5 * (Tn + Tnp1);
+      const dTavg = Tavg - Tamb;
+      const A = ringArea[i];
+      const hRad = (hTopBuf[i] - hConv * A) / A; // recover hRad from H_top = (h_conv+hRad)·A
+      eLossConv += hConv * dTavg * A * dt;
+      eLossRad += hRad * dTavg * A * dt;
+    }
+
     state.time += dt;
     eInput += heaterFactor * heaterPower * dt;
   }
@@ -385,7 +496,37 @@ export function step(state: SimState, substeps = 1) {
     Tcenter,
     Tmax,
     Tmin,
+    maxDeltaT,
   });
+}
+
+// Thomas algorithm for tridiagonal A·x = d.
+//   sub[1..n-1]   sub-diagonal       (sub[0] unused)
+//   diag[0..n-1]  main diagonal
+//   sup[0..n-2]   super-diagonal     (sup[n-1] unused)
+//   rhs[0..n-1]   right-hand side
+//   sol[0..n-1]   output
+//   cprime[0..n-1] scratch (size n)
+function solveTridiag(
+  sub: Float64Array,
+  diag: Float64Array,
+  sup: Float64Array,
+  rhs: Float64Array,
+  sol: Float64Array,
+  cprime: Float64Array,
+  n: number,
+) {
+  let beta = diag[0];
+  cprime[0] = sup[0] / beta;
+  sol[0] = rhs[0] / beta;
+  for (let i = 1; i < n; i++) {
+    beta = diag[i] - sub[i] * cprime[i - 1];
+    cprime[i] = i < n - 1 ? sup[i] / beta : 0;
+    sol[i] = (rhs[i] - sub[i] * sol[i - 1]) / beta;
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    sol[i] -= cprime[i] * sol[i + 1];
+  }
 }
 
 function pushHistory(state: SimState, sample: HistorySample) {

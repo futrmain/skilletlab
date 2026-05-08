@@ -46,6 +46,7 @@ function Index() {
   const [hConv, setHConv] = useState(15);
   const [nrCells, setNrCells] = useState(120);
   const [nzPerLayer, setNzPerLayer] = useState(1);
+  const [dtSec, setDtSec] = useState(0.05);
   const [running, setRunning] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
 
@@ -84,11 +85,12 @@ function Index() {
           initialTemp: ambient + 273.15,
           nr: nrCells,
           nzPerLayer,
+          dt: dtSec,
         },
       ];
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(filledSlots), pans, heaters, ambient, hConv, nrCells, nzPerLayer]);
+  }, [JSON.stringify(filledSlots), pans, heaters, ambient, hConv, nrCells, nzPerLayer, dtSec]);
 
   const snapshots = useSimulations(inputs, running, resetSignal);
   const snapByKey = new Map(snapshots.map((s) => [s.key, s]));
@@ -316,12 +318,69 @@ function Index() {
               max={20}
               onChange={setNzPerLayer}
             />
+            <NumberField
+              label="Time step dt (s)"
+              value={dtSec}
+              step={0.01}
+              min={0.001}
+              max={5}
+              onChange={setDtSec}
+            />
             <p className="text-xs text-muted-foreground pt-2">
-              The solver is a 2D axisymmetric finite-volume scheme on a (z, r) grid. Each material
-              layer is split into the chosen number of axial cells. Higher counts give a smoother
-              solution but cost more CPU and lower the stable time step (changes restart the
-              simulation).
+              The solver is a 2D axisymmetric finite-volume scheme on a (z, r) grid, integrated in
+              time with implicit Crank–Nicolson via Peaceman–Rachford ADI (each half-step is a
+              tridiagonal solve). The scheme is unconditionally stable, so dt is bounded by
+              accuracy, not stability — too large a step can ring around the heater
+              cut-off/re-ignite events. Changes restart the simulation.
             </p>
+          </section>
+
+          <section className="panel p-5 max-w-2xl space-y-3 mt-4">
+            <div className="label-tag mb-2">Per-simulation diagnostics</div>
+            <p className="text-xs text-muted-foreground">
+              Per-cell <span className="font-mono">Fourier number</span>{" "}
+              <span className="font-mono">Fo = α·dt/Δx²</span> with{" "}
+              <span className="font-mono">α = k/(ρ·c)</span>. Pure diffusion has no advective CFL —
+              Fo gates Crank–Nicolson&apos;s accuracy and ringing tendency, not its stability.
+              Reference: <span className="text-emerald-400">Fo ≲ 2 clean</span>,{" "}
+              <span className="text-amber-400">2–5 acceptable</span>,{" "}
+              <span className="text-red-400">&gt; 5 ringing risk</span> (especially around layer
+              interfaces and heater toggle events). If you see a red cell, lower{" "}
+              <span className="font-mono">dt</span> or reduce{" "}
+              <span className="font-mono">nzPerLayer</span> for that layer.
+            </p>
+            {filledSlots.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No simulations.</div>
+            ) : (
+              <div className="space-y-2 text-xs">
+                <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 font-mono text-[10px] text-muted-foreground uppercase tracking-wider">
+                  <span>Pan · Heater</span>
+                  <span className="text-right">max Fo_r</span>
+                  <span className="text-right">max Fo_z</span>
+                </div>
+                {filledSlots.map((s) => {
+                  const pan = pans.find((p) => p.id === s.panId);
+                  const heater = heaters.find((h) => h.id === s.heaterId);
+                  const st = snapByKey.get(s.key)?.state;
+                  return (
+                    <div
+                      key={s.key}
+                      className="grid grid-cols-[1fr_auto_auto] gap-x-4 items-center"
+                    >
+                      <span className="truncate">
+                        {pan?.name ?? "—"} · {heater?.name ?? "—"}
+                      </span>
+                      <span className={`text-right font-mono ${foClass(st?.maxFoR)}`}>
+                        {st ? st.maxFoR.toFixed(2) : "—"}
+                      </span>
+                      <span className={`text-right font-mono ${foClass(st?.maxFoZ)}`}>
+                        {st ? st.maxFoZ.toFixed(2) : "—"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         </TabsContent>
       </Tabs>
@@ -376,6 +435,13 @@ function Toolbar({
       </div>
     </div>
   );
+}
+
+function foClass(fo: number | undefined): string {
+  if (fo === undefined) return "text-muted-foreground";
+  if (fo > 5) return "text-red-400";
+  if (fo > 2) return "text-amber-400";
+  return "text-emerald-400";
 }
 
 function NumberField({

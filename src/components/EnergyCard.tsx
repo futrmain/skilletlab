@@ -108,6 +108,15 @@ export function EnergyCard({
         (log scale)
       </div>
       <ResidualChart state={state} width={340} height={140} />
+
+      <div className="text-xs text-muted-foreground">
+        Peak <span className="font-mono">|ΔT|</span> per CN step.{" "}
+        <span className="text-emerald-400">&lt; 1 K clean</span>,{" "}
+        <span className="text-amber-400">1–5 K acceptable</span>,{" "}
+        <span className="text-red-400">&gt; 5 K dt likely too large</span> (or ringing on a toggle
+        event).
+      </div>
+      <MaxDeltaTChart state={state} width={340} height={120} />
     </section>
   );
 }
@@ -309,6 +318,91 @@ function ResidualChart({
   }, [state, state?.history.length, width, height]);
 
   return <canvas ref={ref} />;
+}
+
+function MaxDeltaTChart({
+  state,
+  width,
+  height,
+}: {
+  state: SimState | null;
+  width: number;
+  height: number;
+}) {
+  const ref = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = width * dpr;
+    c.height = height * dpr;
+    c.style.width = `${width}px`;
+    c.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    const pad = { l: 50, r: 8, t: 8, b: 22 };
+    const w = width - pad.l - pad.r;
+    const h = height - pad.t - pad.b;
+
+    const hist = state?.history ?? [];
+    if (hist.length < 2) {
+      drawAxes(ctx, pad, w, h, "0", "0", "0 s", "0 s");
+      return;
+    }
+
+    const tMax = Math.max(1e-3, hist[hist.length - 1].t);
+    let yMax = 1; // K — always at least 1 K so the chart shows the 1 K threshold
+    for (const s of hist) if (s.maxDeltaT > yMax) yMax = s.maxDeltaT;
+    // Round up
+    yMax = Math.max(1, Math.ceil(yMax * 1.1));
+
+    drawAxes(ctx, pad, w, h, `${yMax.toFixed(1)} K`, "0", `${tMax.toFixed(1)} s`, "0 s");
+
+    const xOf = (t: number) => pad.l + (t / tMax) * w;
+    const yOf = (v: number) => pad.t + h * (1 - v / yMax);
+
+    // Threshold markers at 1 K and 5 K (only draw if within range)
+    drawHRule(ctx, pad.l, pad.l + w, yOf(1), "rgba(110, 220, 150, 0.55)", "1 K");
+    if (5 <= yMax) drawHRule(ctx, pad.l, pad.l + w, yOf(5), "rgba(255, 110, 90, 0.65)", "5 K");
+
+    ctx.strokeStyle = "oklch(0.78 0.18 75)"; // amber line
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let i = 0; i < hist.length; i++) {
+      const x = xOf(hist[i].t);
+      const y = yOf(hist[i].maxDeltaT);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }, [state, state?.history.length, width, height]);
+
+  return <canvas ref={ref} />;
+}
+
+function drawHRule(
+  ctx: CanvasRenderingContext2D,
+  x0: number,
+  x1: number,
+  y: number,
+  color: string,
+  label: string,
+) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(x0, y);
+  ctx.lineTo(x1, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = color;
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.fillText(label, x0 + 4, y - 2);
 }
 
 function drawAxes(

@@ -15,6 +15,7 @@ export interface SimInput {
   initialTemp: number; // K
   nr: number; // radial cells
   nzPerLayer: number; // axial cells per material layer
+  dt: number; // s — Crank–Nicolson time step
 }
 
 export interface SimSnapshot {
@@ -48,6 +49,7 @@ export function useSimulations(
           hConv: inp.hConv,
           nr: inp.nr,
           nzPerLayer: inp.nzPerLayer,
+          dt: inp.dt,
           initialTemp: inp.initialTemp,
         }),
       );
