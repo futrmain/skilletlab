@@ -14,8 +14,10 @@ import { useSimulations, type SimInput } from "@/lib/useSimulations";
 import {
   CompareProfileChart,
   CompareDeltaBars,
+  CompareCookingReadyBars,
   CompareLegend,
   CompareReadyVsSteadyScatter,
+  CompareSpreadVsReadyScatter,
   colorForIndex,
   type CompareEntry,
 } from "@/components/CompareCharts";
@@ -247,7 +249,7 @@ function Index() {
               Add at least one simulation in the Simulate tab.
             </section>
           ) : (
-            <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               <section className="panel p-5 space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="label-tag">Radial Temperature Profiles</div>
@@ -259,8 +261,23 @@ function Index() {
                 <div className="overflow-x-auto">
                   <CompareProfileChart
                     entries={compareEntries}
-                    width={Math.max(720, compareEntries.length * 60 + 600)}
-                    height={340}
+                    width={Math.max(480, compareEntries.length * 50 + 400)}
+                    height={300}
+                  />
+                </div>
+              </section>
+
+              <section className="panel p-5 space-y-3">
+                <div className="label-tag">Cooking ready time</div>
+                <p className="text-xs text-muted-foreground">
+                  Time until every point of the top surface reaches the searing threshold (T_min ≥
+                  200°C). Pans that haven&apos;t reached it yet show as a dashed placeholder.
+                </p>
+                <div className="overflow-x-auto">
+                  <CompareCookingReadyBars
+                    entries={compareEntries}
+                    width={Math.max(360, compareEntries.length * 90 + 100)}
+                    height={280}
                   />
                 </div>
               </section>
@@ -273,8 +290,8 @@ function Index() {
                 <div className="overflow-x-auto">
                   <CompareDeltaBars
                     entries={compareEntries}
-                    width={Math.max(480, compareEntries.length * 110 + 100)}
-                    height={300}
+                    width={Math.max(360, compareEntries.length * 90 + 100)}
+                    height={280}
                   />
                 </div>
               </section>
@@ -282,19 +299,36 @@ function Index() {
               <section className="panel p-5 space-y-3">
                 <div className="label-tag">Cooking ready vs Steady state</div>
                 <p className="text-xs text-muted-foreground">
-                  One point per simulation, plotted once both milestones latch (T_min ≥ 200°C
-                  for cooking-ready; combined energy + spatial criterion for steady). Lower-left
-                  is faster overall; closer to the dashed <span className="font-mono">y = x</span>{" "}
-                  line means the cooking surface stabilises shortly after first being hot enough.
+                  One point per simulation, plotted once both milestones latch. Closer to the
+                  dashed <span className="font-mono">y = x</span> line means the cooking surface
+                  stabilises shortly after first being hot enough.
                 </p>
                 <CompareLegend entries={compareEntries} />
-                <CompareReadyVsSteadyScatter
-                  entries={compareEntries}
-                  width={520}
-                  height={360}
-                />
+                <div className="overflow-x-auto">
+                  <CompareReadyVsSteadyScatter
+                    entries={compareEntries}
+                    width={460}
+                    height={320}
+                  />
+                </div>
               </section>
-            </>
+
+              <section className="panel p-5 space-y-3">
+                <div className="label-tag">Spread vs Cooking ready time</div>
+                <p className="text-xs text-muted-foreground">
+                  Current top-surface spread (T_max − T_min) plotted against cooking-ready time.
+                  Lower-left is the goal: fast to ready and uniform.
+                </p>
+                <CompareLegend entries={compareEntries} />
+                <div className="overflow-x-auto">
+                  <CompareSpreadVsReadyScatter
+                    entries={compareEntries}
+                    width={460}
+                    height={320}
+                  />
+                </div>
+              </section>
+            </div>
           )}
         </TabsContent>
 
