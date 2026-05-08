@@ -190,13 +190,13 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
     <div className="flex flex-col gap-0.5 font-mono">
       <span
         className={cookingDone ? "text-emerald-400" : "text-muted-foreground"}
-        title="T_min on the top surface ≥ 200°C (searing threshold)"
+        title="T_edge (cell at the cooking-zone outer edge) ≥ 200°C (searing threshold)"
       >
         ● Cooking ready = {cookingTime.toFixed(1)}s
       </span>
       <span
         className={steadyDone ? "text-emerald-400" : "text-muted-foreground"}
-        title="avg(T_min) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+        title="avg(T_edge) per heater on/off cycle changed by ≤ 2% from the previous cycle"
       >
         ● Steady state = {steadyTime.toFixed(1)}s
       </span>
@@ -209,7 +209,7 @@ function TempHistoryLegend() {
     <div className="flex gap-2 text-[10px] text-muted-foreground">
       <Swatch color="oklch(0.78 0.18 75)" label="center" />
       <Swatch color="oklch(0.7 0.2 25)" label="max" />
-      <Swatch color="oklch(0.78 0.18 220)" label="min" />
+      <Swatch color="oklch(0.78 0.18 220)" label="edge" />
     </div>
   );
 }

@@ -46,8 +46,9 @@
 //
 // Steady-state detection — cycle-based. The heater hysteresis defines a natural
 // limit cycle: rising edge → rising edge bounds one full ON+OFF cycle. We
-// time-integrate T_min over each cycle; once two complete cycles are in hand,
-// we compare avg(T_min)_last to avg(T_min)_prev — when the relative change is
+// time-integrate T_edge (the top-surface cell at the cooking-zone outer edge,
+// i = nInner − 1) over each cycle; once two complete cycles are in hand, we
+// compare avg(T_edge)_last to avg(T_edge)_prev — when the relative change is
 // ≤ 2%, the limit cycle has stabilised and we latch state.steady = true.
 
 export interface Layer {
@@ -109,16 +110,16 @@ export interface SimState {
   maxFoR: number; // max α·dt/dr² across cells
   maxFoZ: number; // max α·dt/dz² across cells
   // Steady-state detection — cycle-based:
-  //   Average T_min over each heater on/off cycle (rising edge → rising edge).
-  //   Steady when |avg(T_min)_last − avg(T_min)_prev| / avg(T_min)_prev ≤ 2%.
+  //   Average T_edge over each heater on/off cycle (rising edge → rising edge).
+  //   Steady when |avg(T_edge)_last − avg(T_edge)_prev| / avg(T_edge)_prev ≤ 2%.
   steady: boolean;
   steadyAtTime: number | null; // sim time at which the criterion first fired
   cycleStartTime: number; // sim time at which the current cycle began
-  cycleTminIntegral: number; // ∫T_min dt accumulated over the current cycle (K·s)
-  lastCycleAvgTmin: number | null; // avg T_min over the most recently completed cycle (K)
-  prevCycleAvgTmin: number | null; // avg T_min over the cycle before that (K)
-  // "Cooking ready" — sim time at which T_min on the top surface first reaches
-  // the searing threshold (every point of the cooking surface is hot enough).
+  cycleTedgeIntegral: number; // ∫T_edge dt accumulated over the current cycle (K·s)
+  lastCycleAvgTedge: number | null; // avg T_edge over the most recently completed cycle (K)
+  prevCycleAvgTedge: number | null; // avg T_edge over the cycle before that (K)
+  // "Cooking ready" — sim time at which T_edge on the top surface first reaches
+  // the searing threshold (the cooking-edge cell is hot enough).
   cookingReadyAtTime: number | null;
   // ADI scratch buffers
   Tstar: Float64Array; // length Nr*Nz — intermediate field after half-step 1
@@ -152,7 +153,7 @@ export interface HistorySample {
   eRad: number; // J — cumulative radiative loss
   Tcenter: number; // K — top-surface center cell temperature
   Tmax: number; // K — max top-surface temperature
-  Tmin: number; // K — min top-surface temperature
+  Tedge: number; // K — top-surface cell at the cooking-zone outer edge (i = nInner − 1)
   maxDeltaT: number; // K — max |T_{n+1} − T_n| over any cell in this step (peak across substeps)
 }
 
@@ -323,9 +324,9 @@ export function initSim(params: SimParams): SimState {
     steady: false,
     steadyAtTime: null,
     cycleStartTime: 0,
-    cycleTminIntegral: 0,
-    lastCycleAvgTmin: null,
-    prevCycleAvgTmin: null,
+    cycleTedgeIntegral: 0,
+    lastCycleAvgTedge: null,
+    prevCycleAvgTedge: null,
     cookingReadyAtTime: null,
     Tstar: new Float64Array(Nr * Nz),
     hTopBuf: new Float64Array(Nr),
@@ -353,7 +354,7 @@ export function initSim(params: SimParams): SimState {
         eRad: 0,
         Tcenter: initialTemp,
         Tmax: initialTemp,
-        Tmin: initialTemp,
+        Tedge: initialTemp,
         maxDeltaT: 0,
       },
     ],
@@ -427,11 +428,11 @@ export function step(state: SimState, substeps = 1) {
     if (!prevHeaterOn && heaterOn) {
       const cycleDuration = state.time - state.cycleStartTime;
       if (cycleDuration > 0) {
-        const avgTmin = state.cycleTminIntegral / cycleDuration;
-        state.prevCycleAvgTmin = state.lastCycleAvgTmin;
-        state.lastCycleAvgTmin = avgTmin;
-        if (!state.steady && state.prevCycleAvgTmin !== null && state.prevCycleAvgTmin > 0) {
-          const relChange = Math.abs(avgTmin - state.prevCycleAvgTmin) / state.prevCycleAvgTmin;
+        const avgTedge = state.cycleTedgeIntegral / cycleDuration;
+        state.prevCycleAvgTedge = state.lastCycleAvgTedge;
+        state.lastCycleAvgTedge = avgTedge;
+        if (!state.steady && state.prevCycleAvgTedge !== null && state.prevCycleAvgTedge > 0) {
+          const relChange = Math.abs(avgTedge - state.prevCycleAvgTedge) / state.prevCycleAvgTedge;
           if (relChange <= 0.02) {
             state.steady = true;
             state.steadyAtTime = state.time;
@@ -439,7 +440,7 @@ export function step(state: SimState, substeps = 1) {
         }
       }
       state.cycleStartTime = state.time;
-      state.cycleTminIntegral = 0;
+      state.cycleTedgeIntegral = 0;
     }
 
     // Linearise top-face radiation at T_n and snapshot T_n at the top row.
@@ -594,15 +595,10 @@ export function step(state: SimState, substeps = 1) {
     state.time += dt;
     eInput += heaterFactor * heaterPower * dt;
 
-    // Sample T_min from the new top row over the COOKING ZONE only (the
-    // rim is colder by design so including it would mask cooking-surface
-    // dynamics) and accumulate into the current cycle's integral.
-    let TminSub = Infinity;
-    for (let i = 0; i < nInner; i++) {
-      const Ti = T2D[topRowOff + i];
-      if (Ti < TminSub) TminSub = Ti;
-    }
-    state.cycleTminIntegral += TminSub * dt;
+    // Sample T_edge — the top-surface cell at the cooking-zone outer edge —
+    // and accumulate into the current cycle's integral.
+    const TedgeSub = T2D[topRowOff + nInner - 1];
+    state.cycleTedgeIntegral += TedgeSub * dt;
   }
 
   state.eInput = eInput;
@@ -623,21 +619,23 @@ export function step(state: SimState, substeps = 1) {
     eStored += rcDz * rowSum;
   }
 
-  // Top-surface temperature stats at the new time. T_min and T_max scan only
-  // the cooking zone (i < nInner); the rim flange is much colder by
-  // construction and would otherwise dominate T_min / T_max−T_min.
+  // Top-surface temperature stats at the new time. T_max scans only the cooking
+  // zone (i < nInner); T_edge is the single cell at the cooking-zone outer edge
+  // (i = nInner − 1). Together they characterise the spread on the cooking
+  // surface — using the rim cells would mask cooking-surface dynamics.
   let Tmax = -Infinity;
-  let Tmin = Infinity;
   for (let i = 0; i < nInner; i++) {
     const Ti = T2D[topRowOff + i];
     if (Ti > Tmax) Tmax = Ti;
-    if (Ti < Tmin) Tmin = Ti;
   }
   const Tcenter = T2D[topRowOff];
+  const Tedge = T2D[topRowOff + nInner - 1];
 
-  // Latch "cooking ready" — first time the cooking surface min reaches the
-  // searing threshold (T_min ≥ 200°C). Latched once.
-  if (state.cookingReadyAtTime === null && Tmin >= SEARING_TEMP_K) {
+  // Latch "cooking ready" — first time T_edge reaches the searing threshold
+  // (the cooking-edge cell is the slowest to heat up under a centered heater,
+  // so once it's hot enough the rest of the cooking surface is too). Latched
+  // once.
+  if (state.cookingReadyAtTime === null && Tedge >= SEARING_TEMP_K) {
     state.cookingReadyAtTime = state.time;
   }
 
@@ -649,7 +647,7 @@ export function step(state: SimState, substeps = 1) {
     eRad: eLossRad,
     Tcenter,
     Tmax,
-    Tmin,
+    Tedge,
     maxDeltaT,
   });
 

@@ -64,9 +64,9 @@ export function TempHistoryChart({
       yMinC = Math.min(initialC, maillardC, searingC);
       yMaxC = Math.max(initialC + 50, maillardC, searingC);
       for (const s of hist) {
-        const minC = s.Tmin - 273.15;
+        const edgeC = s.Tedge - 273.15;
         const maxC = s.Tmax - 273.15;
-        if (minC < yMinC) yMinC = minC;
+        if (edgeC < yMinC) yMinC = edgeC;
         if (maxC > yMaxC) yMaxC = maxC;
       }
     }
@@ -102,12 +102,12 @@ export function TempHistoryChart({
 
     if (hist.length < 2) return;
 
-    // Draw order matters: when the heater is a ring, the pan center is often
-    // the coldest top-surface point, so T_min and T_center coincide. We paint
-    // T_min last so the blue line stays visible in that case.
+    // Draw order matters: T_edge can coincide with T_center when the heater
+    // is a ring (until heat reaches both extremes). Paint T_edge last so its
+    // line stays visible in that case.
     drawSeries(ctx, hist, xOf, yOf, (s) => s.Tmax - 273.15, COL.max);
     drawSeries(ctx, hist, xOf, yOf, (s) => s.Tcenter - 273.15, COL.center);
-    drawSeries(ctx, hist, xOf, yOf, (s) => s.Tmin - 273.15, COL.min);
+    drawSeries(ctx, hist, xOf, yOf, (s) => s.Tedge - 273.15, COL.min);
     // history.length is the per-tick signal that retriggers this effect; the
     // SimState reference itself is stable across renders so we can't depend on
     // it directly.
@@ -149,10 +149,10 @@ function drawMarker(
 
 function drawSeries(
   ctx: CanvasRenderingContext2D,
-  hist: { t: number; Tcenter: number; Tmax: number; Tmin: number }[],
+  hist: { t: number; Tcenter: number; Tmax: number; Tedge: number }[],
   xOf: (t: number) => number,
   yOf: (Tc: number) => number,
-  pick: (s: { t: number; Tcenter: number; Tmax: number; Tmin: number }) => number,
+  pick: (s: { t: number; Tcenter: number; Tmax: number; Tedge: number }) => number,
   color: string,
 ) {
   ctx.strokeStyle = color;

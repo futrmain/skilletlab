@@ -142,19 +142,19 @@ export function CompareDeltaBars({ entries, width = 720, height = 280 }: BProps)
     const h = height - pad.t - pad.b;
 
     const data = entries.map((e) => {
-      const T = e.state?.T;
-      let lo = Infinity,
+      const st = e.state;
+      const T = st?.T;
+      let edge = e.initialTempK;
+      let hi = e.initialTempK;
+      if (T && st) {
+        const nIn = st.nInner;
+        // Max over cooking zone only (rim is cold by design and would dominate).
         hi = -Infinity;
-      if (T) {
-        for (let i = 0; i < T.length; i++) {
-          if (T[i] < lo) lo = T[i];
-          if (T[i] > hi) hi = T[i];
-        }
-      } else {
-        lo = e.initialTempK;
-        hi = e.initialTempK;
+        for (let i = 0; i < nIn; i++) if (T[i] > hi) hi = T[i];
+        // T_edge: the cell at the cooking-zone outer edge.
+        edge = T[nIn - 1];
       }
-      return { e, delta: Math.max(0, hi - lo) };
+      return { e, delta: Math.max(0, hi - edge) };
     });
 
     const maxDelta = Math.max(10, ...data.map((d) => d.delta));
@@ -204,7 +204,7 @@ export function CompareDeltaBars({ entries, width = 720, height = 280 }: BProps)
     // title
     ctx.fillStyle = "rgba(180,180,180,0.7)";
     ctx.font = "10px ui-monospace, monospace";
-    ctx.fillText("T_max − T_min across pan (°C)", pad.l, pad.t - 4);
+    ctx.fillText("T_max − T_edge (°C)", pad.l, pad.t - 4);
   }, [entries, width, height]);
 
   return <canvas ref={ref} />;
@@ -326,16 +326,15 @@ export function CompareSpreadVsReadyScatter({ entries, width = 520, height = 360
     const h = height - pad.t - pad.b;
 
     const points = entries.flatMap((e) => {
-      const tc = e.state?.cookingReadyAtTime;
-      const T = e.state?.T;
-      if (tc == null || !T || T.length === 0) return [];
-      let lo = Infinity;
+      const st = e.state;
+      const tc = st?.cookingReadyAtTime;
+      const T = st?.T;
+      if (tc == null || !T || !st || T.length === 0) return [];
+      const nIn = st.nInner;
       let hi = -Infinity;
-      for (let i = 0; i < T.length; i++) {
-        if (T[i] < lo) lo = T[i];
-        if (T[i] > hi) hi = T[i];
-      }
-      return [{ entry: e, tc, delta: Math.max(0, hi - lo) }];
+      for (let i = 0; i < nIn; i++) if (T[i] > hi) hi = T[i];
+      const edge = T[nIn - 1];
+      return [{ entry: e, tc, delta: Math.max(0, hi - edge) }];
     });
 
     let xDataMin = Infinity;
@@ -388,7 +387,7 @@ export function CompareSpreadVsReadyScatter({ entries, width = 520, height = 360
     ctx.save();
     ctx.translate(14, pad.t + h / 2);
     ctx.rotate(-Math.PI / 2);
-    ctx.fillText("T_max − T_min (°C)", 0, 0);
+    ctx.fillText("T_max − T_edge (°C)", 0, 0);
     ctx.restore();
     ctx.textAlign = "left";
 

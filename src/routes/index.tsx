@@ -122,7 +122,7 @@ function Index() {
 
   // Global ranges for the "sync scales" toggle. Two distinct ranges because the
   // PanView heatmap + radial profile show *current* T whereas the temperature-
-  // history chart spans the full Tmin/Tmax trajectory; using one range for both
+  // history chart spans the full Tedge/Tmax trajectory; using one range for both
   // would either wash out the heatmap colors or clip the history.
   let syncProfileMinK = initialTempK;
   let syncProfileMaxK = initialTempK + 50;
@@ -139,9 +139,9 @@ function Index() {
       }
       const h = snap.state?.history ?? [];
       for (const sm of h) {
-        const minC = sm.Tmin - 273.15;
+        const edgeC = sm.Tedge - 273.15;
         const maxC = sm.Tmax - 273.15;
-        if (minC < syncHistMinC) syncHistMinC = minC;
+        if (edgeC < syncHistMinC) syncHistMinC = edgeC;
         if (maxC > syncHistMaxC) syncHistMaxC = maxC;
       }
     }
@@ -271,7 +271,7 @@ function Index() {
               <section className="panel p-5 space-y-3">
                 <div className="label-tag">Cooking ready time</div>
                 <p className="text-xs text-muted-foreground">
-                  Time until every point of the top surface reaches the searing threshold (T_min ≥
+                  Time until the cooking-edge cell reaches the searing threshold (T_edge ≥
                   200°C). Pans that haven&apos;t reached it yet show as a dashed placeholder.
                 </p>
                 <div className="overflow-x-auto">
@@ -284,7 +284,7 @@ function Index() {
               </section>
 
               <section className="panel p-5 space-y-3">
-                <div className="label-tag">Temperature Spread (T_max − T_min)</div>
+                <div className="label-tag">Temperature Spread (T_max − T_edge)</div>
                 <p className="text-xs text-muted-foreground">
                   Lower bars mean more uniform heat distribution across the pan surface.
                 </p>
@@ -313,7 +313,7 @@ function Index() {
               <section className="panel p-5 space-y-3">
                 <div className="label-tag">Spread vs Cooking ready time</div>
                 <p className="text-xs text-muted-foreground">
-                  Current top-surface spread (T_max − T_min) plotted against cooking-ready time.
+                  Current top-surface spread (T_max − T_edge) plotted against cooking-ready time.
                   Lower-left is the goal: fast to ready and uniform.
                 </p>
                 <CompareLegend entries={compareEntries} />
@@ -424,11 +424,12 @@ function Index() {
               cut-off/re-ignite events. Changes restart the simulation.
             </p>
             <p className="text-xs text-muted-foreground">
-              Steady-state criterion: track the average <span className="font-mono">T_min</span>{" "}
-              over each heater on/off cycle (rising edge → rising edge). Once two complete cycles
-              are in hand, compare avg(T_min) of the just-completed cycle to the cycle before it. If
-              the relative change is{" "}
-              <span className="font-mono">|Δavg(T_min)| / avg(T_min)_prev ≤ 2%</span>, the limit
+              Steady-state criterion: track the average <span className="font-mono">T_edge</span>{" "}
+              (top-surface cell at the cooking-zone outer edge) over each heater on/off cycle
+              (rising edge → rising edge). Once two complete cycles are in hand, compare
+              avg(T_edge) of the just-completed cycle to the cycle before it. If the relative
+              change is{" "}
+              <span className="font-mono">|Δavg(T_edge)| / avg(T_edge)_prev ≤ 2%</span>, the limit
               cycle has stabilised. Each simulation freezes when its criterion fires; the run loop
               stops when all simulations are steady. Requires the heater to actually cycle — if
               losses keep the pan below the cut-off temperature, no cycles complete and the
