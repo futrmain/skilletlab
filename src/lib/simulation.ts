@@ -102,6 +102,9 @@ export interface HistorySample {
   eStored: number; // J — Σ ρcV (T − T_initial) at time t
   eConv: number; // J — cumulative convective loss
   eRad: number; // J — cumulative radiative loss
+  Tcenter: number; // K — top-surface center cell temperature
+  Tmax: number; // K — max top-surface temperature
+  Tmin: number; // K — min top-surface temperature
 }
 
 export function effectiveProps(layers: Layer[]) {
@@ -222,7 +225,18 @@ export function initSim(params: SimParams): SimState {
     eLossConv: 0,
     eLossRad: 0,
     initialTemp,
-    history: [{ t: 0, eIn: 0, eStored: 0, eConv: 0, eRad: 0 }],
+    history: [
+      {
+        t: 0,
+        eIn: 0,
+        eStored: 0,
+        eConv: 0,
+        eRad: 0,
+        Tcenter: initialTemp,
+        Tmax: initialTemp,
+        Tmin: initialTemp,
+      },
+    ],
     historyMax: 4000,
   };
 }
@@ -352,12 +366,25 @@ export function step(state: SimState, substeps = 1) {
     eStored += rcDz * rowSum;
   }
 
+  // Top-surface temperature stats at the new time
+  let Tmax = -Infinity;
+  let Tmin = Infinity;
+  for (let i = 0; i < Nr; i++) {
+    const Ti = T2D[topRowOff + i];
+    if (Ti > Tmax) Tmax = Ti;
+    if (Ti < Tmin) Tmin = Ti;
+  }
+  const Tcenter = T2D[topRowOff];
+
   pushHistory(state, {
     t: state.time,
     eIn: eInput,
     eStored,
     eConv: eLossConv,
     eRad: eLossRad,
+    Tcenter,
+    Tmax,
+    Tmin,
   });
 }
 

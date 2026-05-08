@@ -10,6 +10,9 @@ interface Props {
   tMin: number;
   tMax: number;
   size?: number;
+  // Per-tick signal (e.g. state.time) so the heat-map redraws even when T/r
+  // refs stay stable (their contents mutate in place).
+  tick?: number;
 }
 
 export function PanView({
@@ -21,6 +24,7 @@ export function PanView({
   tMin,
   tMax,
   size = 380,
+  tick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -88,7 +92,7 @@ export function PanView({
     ctx.beginPath();
     ctx.arc(cx, cy, radiusPx, 0, Math.PI * 2);
     ctx.stroke();
-  }, [T, r, panRadius, heaterRadius, heaterThickness, tMin, tMax]);
+  }, [T, r, panRadius, heaterRadius, heaterThickness, tMin, tMax, tick]);
 
   return (
     <canvas

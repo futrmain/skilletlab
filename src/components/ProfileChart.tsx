@@ -7,9 +7,12 @@ interface Props {
   tMax: number;
   width?: number;
   height?: number;
+  // Per-tick signal (e.g. state.time) so the canvas redraws even when the
+  // T/r typed-array references stay stable (their contents mutate in place).
+  tick?: number;
 }
 
-export function ProfileChart({ T, r, tMin, tMax, width = 380, height = 180 }: Props) {
+export function ProfileChart({ T, r, tMin, tMax, width = 380, height = 180, tick }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current;
@@ -56,7 +59,7 @@ export function ProfileChart({ T, r, tMin, tMax, width = 380, height = 180 }: Pr
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
-  }, [T, r, tMin, tMax, width, height]);
+  }, [T, r, tMin, tMax, width, height, tick]);
 
   return <canvas ref={ref} width={width} height={height} style={{ width, height }} />;
 }

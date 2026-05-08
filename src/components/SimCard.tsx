@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/select";
 import { PanView } from "./PanView";
 import { ProfileChart } from "./ProfileChart";
+import { TempHistoryChart } from "./TempHistoryChart";
 import { type SimState } from "@/lib/simulation";
 import { type PanConfig, type HeaterConfig } from "@/lib/configs";
 import { X } from "lucide-react";
@@ -60,7 +61,7 @@ export function SimCard({
   const peakC = tMaxK - 273.15;
 
   return (
-    <section className="panel p-5 space-y-4 min-w-[340px] flex-1">
+    <section className="panel p-5 space-y-4 min-w-[340px] xl:min-w-[680px] flex-1">
       <div className="flex items-start gap-2">
         <div className="grid grid-cols-1 gap-2 flex-1">
           <div>
@@ -119,11 +120,32 @@ export function SimCard({
           heaterThickness={heater.thickness}
           tMin={tMinK}
           tMax={tMaxK}
+          tick={state?.time}
           size={300}
         />
       </div>
 
-      <ProfileChart T={Tarr} r={Rarr} tMin={tMinK} tMax={tMaxK} width={320} height={140} />
+      <div className="flex flex-wrap gap-3 justify-center">
+        <div className="space-y-1">
+          <div className="label-tag">Radial profile</div>
+          <ProfileChart
+            T={Tarr}
+            r={Rarr}
+            tMin={tMinK}
+            tMax={tMaxK}
+            tick={state?.time}
+            width={300}
+            height={140}
+          />
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <div className="label-tag">Top surface vs time</div>
+            <TempHistoryLegend />
+          </div>
+          <TempHistoryChart state={state} initialTempK={initialTempK} width={300} height={140} />
+        </div>
+      </div>
 
       <div className="grid grid-cols-3 gap-2 text-center text-xs">
         <Stat label="Center" value={`${centerC.toFixed(0)}°`} accent />
@@ -131,6 +153,25 @@ export function SimCard({
         <Stat label="Peak" value={`${peakC.toFixed(0)}°`} />
       </div>
     </section>
+  );
+}
+
+function TempHistoryLegend() {
+  return (
+    <div className="flex gap-2 text-[10px] text-muted-foreground">
+      <Swatch color="oklch(0.78 0.18 75)" label="center" />
+      <Swatch color="oklch(0.7 0.2 25)" label="max" />
+      <Swatch color="oklch(0.78 0.18 220)" label="min" />
+    </div>
+  );
+}
+
+function Swatch({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="flex items-center gap-1">
+      <span className="inline-block w-2 h-2 rounded-sm" style={{ background: color }} />
+      <span>{label}</span>
+    </span>
   );
 }
 

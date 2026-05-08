@@ -167,8 +167,8 @@ function EnergyChart({
     }
 
     // Power = dE/dt via discrete differences between consecutive samples.
-    // (Re-using HistorySample shape; eIn/eStored/eConv/eRad now hold W not J.)
-    const power: typeof hist = [];
+    type PowerPoint = { t: number; eIn: number; eStored: number; eConv: number; eRad: number };
+    const power: PowerPoint[] = [];
     for (let i = 1; i < hist.length; i++) {
       const dtSample = hist[i].t - hist[i - 1].t;
       if (dtSample <= 0) continue;
@@ -204,7 +204,7 @@ function EnergyChart({
     drawLine(ctx, power, xOf, yOf, (s) => s.eStored, COL.stored);
     drawLine(ctx, power, xOf, yOf, (s) => s.eConv, COL.conv);
     drawLine(ctx, power, xOf, yOf, (s) => s.eRad, COL.rad);
-  }, [state, width, height]);
+  }, [state, state?.history.length, width, height]);
 
   return <canvas ref={ref} />;
 }
@@ -306,7 +306,7 @@ function ResidualChart({
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
-  }, [state, width, height]);
+  }, [state, state?.history.length, width, height]);
 
   return <canvas ref={ref} />;
 }
