@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -14,6 +15,7 @@ import {
   CompareProfileChart,
   CompareDeltaBars,
   CompareLegend,
+  CompareReadyVsSteadyScatter,
   colorForIndex,
   type CompareEntry,
 } from "@/components/CompareCharts";
@@ -47,16 +49,13 @@ function Index() {
   const [nrCells, setNrCells] = useState(120);
   const [nzPerLayer, setNzPerLayer] = useState(1);
   const [dtSec, setDtSec] = useState(0.05);
-  const [steadyWindowSec, setSteadyWindowSec] = useState(30);
+  const [syncScales, setSyncScales] = useState(true);
   const [running, setRunning] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
 
   const [slots, setSlots] = useState<SimSlot[]>(() => [
-    {
-      key: uid(),
-      panId: "",
-      heaterId: "",
-    },
+    { key: uid(), panId: "tpl-tri-ply", heaterId: "tpl-induction" },
+    { key: uid(), panId: "tpl-cast-iron", heaterId: "tpl-induction" },
   ]);
 
   // Default-fill missing pan/heater ids when configs become available
@@ -87,22 +86,11 @@ function Index() {
           nr: nrCells,
           nzPerLayer,
           dt: dtSec,
-          steadyWindow: steadyWindowSec,
         },
       ];
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    JSON.stringify(filledSlots),
-    pans,
-    heaters,
-    ambient,
-    hConv,
-    nrCells,
-    nzPerLayer,
-    dtSec,
-    steadyWindowSec,
-  ]);
+  }, [JSON.stringify(filledSlots), pans, heaters, ambient, hConv, nrCells, nzPerLayer, dtSec]);
 
   const snapshots = useSimulations(inputs, running, resetSignal);
   const snapByKey = new Map(snapshots.map((s) => [s.key, s]));
@@ -128,6 +116,41 @@ function Index() {
     setSlots((s) => (s.length > 1 ? s.filter((x) => x.key !== key) : s));
 
   const initialTempK = ambient + 273.15;
+
+  // Global ranges for the "sync scales" toggle. Two distinct ranges because the
+  // PanView heatmap + radial profile show *current* T whereas the temperature-
+  // history chart spans the full Tmin/Tmax trajectory; using one range for both
+  // would either wash out the heatmap colors or clip the history.
+  let syncProfileMinK = initialTempK;
+  let syncProfileMaxK = initialTempK + 50;
+  let syncHistMinC = Infinity;
+  let syncHistMaxC = -Infinity;
+  if (syncScales) {
+    for (const snap of snapshots) {
+      const T = snap.state?.T;
+      if (T) {
+        for (let i = 0; i < T.length; i++) {
+          if (T[i] < syncProfileMinK) syncProfileMinK = T[i];
+          if (T[i] > syncProfileMaxK) syncProfileMaxK = T[i];
+        }
+      }
+      const h = snap.state?.history ?? [];
+      for (const sm of h) {
+        const minC = sm.Tmin - 273.15;
+        const maxC = sm.Tmax - 273.15;
+        if (minC < syncHistMinC) syncHistMinC = minC;
+        if (maxC > syncHistMaxC) syncHistMaxC = maxC;
+      }
+    }
+    syncProfileMaxK = Math.max(syncProfileMaxK, syncProfileMinK + 50);
+  }
+  const syncedProfileRange = syncScales
+    ? { min: syncProfileMinK, max: syncProfileMaxK }
+    : undefined;
+  const syncedHistRangeC =
+    syncScales && Number.isFinite(syncHistMinC) && Number.isFinite(syncHistMaxC)
+      ? { min: syncHistMinC, max: syncHistMaxC }
+      : undefined;
 
   const compareEntries: CompareEntry[] = filledSlots.map((s, i) => {
     const pan = pans.find((p) => p.id === s.panId);
@@ -181,6 +204,10 @@ function Index() {
             ambient={ambient}
             hConv={hConv}
           />
+          <label className="flex items-center gap-2 text-xs text-muted-foreground select-none cursor-pointer w-fit">
+            <Checkbox checked={syncScales} onCheckedChange={(v) => setSyncScales(v === true)} />
+            Sync y-scales and colorbars across simulations
+          </label>
           <div className="flex flex-wrap gap-4 items-stretch">
             {filledSlots.map((s) => (
               <SimCard
@@ -193,6 +220,8 @@ function Index() {
                 onHeaterChange={(id) => updateSlot(s.key, { heaterId: id })}
                 state={snapByKey.get(s.key)?.state ?? null}
                 initialTempK={initialTempK}
+                profileRangeOverride={syncedProfileRange}
+                historyRangeCOverride={syncedHistRangeC}
                 removable={filledSlots.length > 1}
                 onRemove={() => removeSlot(s.key)}
               />
@@ -248,6 +277,22 @@ function Index() {
                     height={300}
                   />
                 </div>
+              </section>
+
+              <section className="panel p-5 space-y-3">
+                <div className="label-tag">Cooking ready vs Steady state</div>
+                <p className="text-xs text-muted-foreground">
+                  One point per simulation, plotted once both milestones latch (T_min ≥ 200°C
+                  for cooking-ready; combined energy + spatial criterion for steady). Lower-left
+                  is faster overall; closer to the dashed <span className="font-mono">y = x</span>{" "}
+                  line means the cooking surface stabilises shortly after first being hot enough.
+                </p>
+                <CompareLegend entries={compareEntries} />
+                <CompareReadyVsSteadyScatter
+                  entries={compareEntries}
+                  width={520}
+                  height={360}
+                />
               </section>
             </>
           )}
@@ -344,14 +389,6 @@ function Index() {
               max={5}
               onChange={setDtSec}
             />
-            <NumberField
-              label="Steady-state window (s)"
-              value={steadyWindowSec}
-              step={5}
-              min={1}
-              max={600}
-              onChange={setSteadyWindowSec}
-            />
             <p className="text-xs text-muted-foreground pt-2">
               The solver is a 2D axisymmetric finite-volume scheme on a (z, r) grid, integrated in
               time with implicit Crank–Nicolson via Peaceman–Rachford ADI (each half-step is a
@@ -360,21 +397,15 @@ function Index() {
               cut-off/re-ignite events. Changes restart the simulation.
             </p>
             <p className="text-xs text-muted-foreground">
-              Steady-state criterion (both must hold over the window{" "}
-              <span className="font-mono">W</span>):
-              <br />• Energy:{" "}
-              <span className="font-mono">|⟨dE_stored/dt⟩_W| / heaterPower &lt; 1%</span> — input
-              and output balanced.
-              <br />• Spatial: <span className="font-mono">
-                |ΔT_min| / (T_max − T_amb) &lt; 1%
-              </span>{" "}
-              — the rim (slowest point) has stopped drifting relative to the overall ΔT scale.
-              Required because for low-α materials (carbon steel, stainless) the energy check alone
-              fires early once the heater starts cycling while the rim is still warming up.
-              <br />
-              Each simulation freezes when both fire; the run loop stops when all simulations are
-              steady. Pick a window long enough to span a few hysteresis cycles — too short and
-              limit-cycle swings register as activity; too long and detection lags.
+              Steady-state criterion: track the average{" "}
+              <span className="font-mono">T_min</span> over each heater on/off cycle (rising edge
+              → rising edge). Once two complete cycles are in hand, compare avg(T_min) of the
+              just-completed cycle to the cycle before it. If the relative change is{" "}
+              <span className="font-mono">|Δavg(T_min)| / avg(T_min)_prev ≤ 2%</span>, the limit
+              cycle has stabilised. Each simulation freezes when its criterion fires; the run
+              loop stops when all simulations are steady. Requires the heater to actually cycle —
+              if losses keep the pan below the cut-off temperature, no cycles complete and the
+              simulation never declares steady.
             </p>
           </section>
 

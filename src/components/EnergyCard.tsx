@@ -94,19 +94,14 @@ export function EnergyCard({
         )}
       </div>
 
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">
-          t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
-          {state?.steady && (
-            <span
-              className="ml-2 text-emerald-400 font-mono"
-              title={`Energy: |⟨dE_stored/dt⟩_${state.params.steadyWindow}s| / heaterPower < 1%  AND  Spatial: |ΔT_min| / (T_max − T_amb) < 1%`}
-            >
-              ● Steady at {state.steadyAtTime?.toFixed(1) ?? "—"}s
-            </span>
-          )}
-        </span>
-        <Legend />
+      <div className="space-y-1 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">
+            t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
+          </span>
+          <Legend />
+        </div>
+        <ProgressIndicators state={state} />
       </div>
 
       <EnergyChart state={state} width={340} height={170} />
@@ -126,6 +121,30 @@ export function EnergyCard({
       </div>
       <MaxDeltaTChart state={state} width={340} height={120} />
     </section>
+  );
+}
+
+function ProgressIndicators({ state }: { state: SimState | null }) {
+  const t = state?.time ?? 0;
+  const cookingDone = state?.cookingReadyAtTime != null;
+  const cookingTime = cookingDone ? (state?.cookingReadyAtTime ?? 0) : t;
+  const steadyDone = state?.steady === true;
+  const steadyTime = steadyDone ? (state?.steadyAtTime ?? 0) : t;
+  return (
+    <div className="flex flex-col gap-0.5 font-mono">
+      <span
+        className={cookingDone ? "text-emerald-400" : "text-muted-foreground"}
+        title="T_min on the top surface ≥ 200°C (searing threshold)"
+      >
+        ● Cooking ready = {cookingTime.toFixed(1)}s
+      </span>
+      <span
+        className={steadyDone ? "text-emerald-400" : "text-muted-foreground"}
+        title="avg(T_min) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+      >
+        ● Steady state = {steadyTime.toFixed(1)}s
+      </span>
+    </div>
   );
 }
 

@@ -65,7 +65,7 @@ export function PanEditor({
       {
         id: uid(),
         name: "New pan",
-        diameter: 0.26,
+        diameter: 0.28,
         layers: [{ name: "Aluminum", thickness: 0.003, ...MATERIALS.Aluminum }],
       },
     ]);

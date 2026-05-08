@@ -210,6 +210,128 @@ export function CompareDeltaBars({ entries, width = 720, height = 280 }: BProps)
   return <canvas ref={ref} />;
 }
 
+interface SProps {
+  entries: CompareEntry[];
+  width?: number;
+  height?: number;
+}
+
+export function CompareReadyVsSteadyScatter({ entries, width = 520, height = 360 }: SProps) {
+  const ref = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = width * dpr;
+    c.height = height * dpr;
+    c.style.width = `${width}px`;
+    c.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+
+    const pad = { l: 64, r: 16, t: 16, b: 44 };
+    const w = width - pad.l - pad.r;
+    const h = height - pad.t - pad.b;
+
+    // Only plot entries that have both milestones latched.
+    const points = entries.flatMap((e) => {
+      const tc = e.state?.cookingReadyAtTime;
+      const ts = e.state?.steadyAtTime;
+      if (tc == null || ts == null) return [];
+      return [{ entry: e, tc, ts }];
+    });
+
+    // Equal axis range so the y=x diagonal is meaningful.
+    let amax = 10;
+    for (const p of points) {
+      if (p.tc > amax) amax = p.tc;
+      if (p.ts > amax) amax = p.ts;
+    }
+    amax *= 1.1;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.fillStyle = "rgba(220,220,220,0.6)";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 5; i++) {
+      const y = pad.t + (h * i) / 5;
+      ctx.beginPath();
+      ctx.moveTo(pad.l, y);
+      ctx.lineTo(pad.l + w, y);
+      ctx.stroke();
+      const v = amax - (amax * i) / 5;
+      ctx.fillText(`${v.toFixed(0)} s`, 4, y + 3);
+    }
+    for (let i = 0; i <= 5; i++) {
+      const x = pad.l + (w * i) / 5;
+      ctx.beginPath();
+      ctx.moveTo(x, pad.t);
+      ctx.lineTo(x, pad.t + h);
+      ctx.stroke();
+      const v = (amax * i) / 5;
+      ctx.fillText(`${v.toFixed(0)}`, x - 8, height - 26);
+    }
+
+    ctx.fillStyle = "rgba(180,180,180,0.75)";
+    ctx.font = "11px ui-monospace, monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("Cooking ready (s)", pad.l + w / 2, height - 8);
+    ctx.save();
+    ctx.translate(14, pad.t + h / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText("Steady state (s)", 0, 0);
+    ctx.restore();
+    ctx.textAlign = "left";
+
+    const xOf = (t: number) => pad.l + (t / amax) * w;
+    const yOf = (t: number) => pad.t + h * (1 - t / amax);
+
+    // y = x reference — steady-state can never come before cooking-ready, so
+    // points should always land on or above the diagonal.
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(xOf(0), yOf(0));
+    ctx.lineTo(xOf(amax), yOf(amax));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(180,180,180,0.5)";
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.fillText("y = x", xOf(amax * 0.92) - 24, yOf(amax * 0.92) - 4);
+
+    if (points.length === 0) {
+      ctx.fillStyle = "rgba(180,180,180,0.6)";
+      ctx.font = "11px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText(
+        "Waiting for simulations to reach both milestones…",
+        pad.l + w / 2,
+        pad.t + h / 2,
+      );
+      ctx.textAlign = "left";
+      return;
+    }
+
+    for (const p of points) {
+      const x = xOf(p.tc);
+      const y = yOf(p.ts);
+      ctx.fillStyle = p.entry.color;
+      ctx.beginPath();
+      ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.55)";
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    }
+  }, [entries, width, height]);
+
+  return <canvas ref={ref} />;
+}
+
 export function CompareLegend({ entries }: { entries: CompareEntry[] }) {
   return (
     <div className="flex flex-wrap gap-3">

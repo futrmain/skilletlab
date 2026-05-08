@@ -43,6 +43,12 @@
 // At end of every step() the solver pushes a HistorySample so the UI can plot
 // energies and the conservation residual  E_input − E_stored − E_lossConv − E_lossRad
 // (≈ floating-point round-off for this scheme) on a log-y axis.
+//
+// Steady-state detection — cycle-based. The heater hysteresis defines a natural
+// limit cycle: rising edge → rising edge bounds one full ON+OFF cycle. We
+// time-integrate T_min over each cycle; once two complete cycles are in hand,
+// we compare avg(T_min)_last to avg(T_min)_prev — when the relative change is
+// ≤ 2%, the limit cycle has stabilised and we latch state.steady = true.
 
 export interface Layer {
   name: string;
@@ -67,7 +73,6 @@ export interface SimParams {
   nr: number; // number of radial cells
   nzPerLayer: number; // axial cells per material layer (>=1)
   dt: number; // s — Crank–Nicolson time step (user-controlled, accuracy-bounded)
-  steadyWindow: number; // s — sliding window for steady-state detection
 }
 
 export interface SimState {
@@ -99,9 +104,18 @@ export interface SimState {
   // CN diagnostics (mesh+material+dt only — known at setup)
   maxFoR: number; // max α·dt/dr² across cells
   maxFoZ: number; // max α·dt/dz² across cells
-  // Steady-state detection: |⟨dE_stored/dt⟩_10s| / heaterPower < 0.01
+  // Steady-state detection — cycle-based:
+  //   Average T_min over each heater on/off cycle (rising edge → rising edge).
+  //   Steady when |avg(T_min)_last − avg(T_min)_prev| / avg(T_min)_prev ≤ 2%.
   steady: boolean;
   steadyAtTime: number | null; // sim time at which the criterion first fired
+  cycleStartTime: number; // sim time at which the current cycle began
+  cycleTminIntegral: number; // ∫T_min dt accumulated over the current cycle (K·s)
+  lastCycleAvgTmin: number | null; // avg T_min over the most recently completed cycle (K)
+  prevCycleAvgTmin: number | null; // avg T_min over the cycle before that (K)
+  // "Cooking ready" — sim time at which T_min on the top surface first reaches
+  // the searing threshold (every point of the cooking surface is hot enough).
+  cookingReadyAtTime: number | null;
   // ADI scratch buffers
   Tstar: Float64Array; // length Nr*Nz — intermediate field after half-step 1
   hTopBuf: Float64Array; // length Nr — H_top[i] = (h_conv + hRad(T_n))·ringArea[i]
@@ -144,6 +158,9 @@ export function effectiveProps(layers: Layer[]) {
 }
 
 const SIGMA = 5.670374419e-8;
+// "Cooking ready" threshold — matches the searing marker on the time-history
+// chart (kept in sync manually; if you adjust one, adjust the other).
+export const SEARING_TEMP_K = 200 + 273.15;
 
 export function initSim(params: SimParams): SimState {
   const { layers, panRadius, heaterRadius, heaterPower, initialTemp } = params;
@@ -257,6 +274,11 @@ export function initSim(params: SimParams): SimState {
     maxFoZ,
     steady: false,
     steadyAtTime: null,
+    cycleStartTime: 0,
+    cycleTminIntegral: 0,
+    lastCycleAvgTmin: null,
+    prevCycleAvgTmin: null,
+    cookingReadyAtTime: null,
     Tstar: new Float64Array(nr * Nz),
     hTopBuf: new Float64Array(nr),
     TnTopBuf: new Float64Array(nr),
@@ -341,9 +363,34 @@ export function step(state: SimState, substeps = 1) {
   for (let s = 0; s < substeps; s++) {
     // Hysteresis decision frozen for the whole step (T at its start).
     const Tcenter = T2D[topRowOff];
+    const prevHeaterOn = heaterOn;
     if (heaterOn && Tcenter >= setHigh) heaterOn = false;
     else if (!heaterOn && Tcenter <= setLow) heaterOn = true;
     const heaterFactor = heaterOn ? 1 : 0;
+
+    // Rising edge (off → on) closes the previous cycle and opens a new one.
+    if (!prevHeaterOn && heaterOn) {
+      const cycleDuration = state.time - state.cycleStartTime;
+      if (cycleDuration > 0) {
+        const avgTmin = state.cycleTminIntegral / cycleDuration;
+        state.prevCycleAvgTmin = state.lastCycleAvgTmin;
+        state.lastCycleAvgTmin = avgTmin;
+        if (
+          !state.steady &&
+          state.prevCycleAvgTmin !== null &&
+          state.prevCycleAvgTmin > 0
+        ) {
+          const relChange =
+            Math.abs(avgTmin - state.prevCycleAvgTmin) / state.prevCycleAvgTmin;
+          if (relChange <= 0.02) {
+            state.steady = true;
+            state.steadyAtTime = state.time;
+          }
+        }
+      }
+      state.cycleStartTime = state.time;
+      state.cycleTminIntegral = 0;
+    }
 
     // Linearise top-face radiation at T_n and snapshot T_n at the top row.
     for (let i = 0; i < Nr; i++) {
@@ -463,6 +510,15 @@ export function step(state: SimState, substeps = 1) {
 
     state.time += dt;
     eInput += heaterFactor * heaterPower * dt;
+
+    // Sample T_min from the new top row and accumulate into the current cycle's
+    // integral. Keeps the cycle average accurate at substep granularity.
+    let TminSub = Infinity;
+    for (let i = 0; i < Nr; i++) {
+      const Ti = T2D[topRowOff + i];
+      if (Ti < TminSub) TminSub = Ti;
+    }
+    state.cycleTminIntegral += TminSub * dt;
   }
 
   state.eInput = eInput;
@@ -493,6 +549,12 @@ export function step(state: SimState, substeps = 1) {
   }
   const Tcenter = T2D[topRowOff];
 
+  // Latch "cooking ready" — first time every top-surface cell exceeds the
+  // searing threshold (T_min ≥ 200°C). Once set, never cleared until reset.
+  if (state.cookingReadyAtTime === null && Tmin >= SEARING_TEMP_K) {
+    state.cookingReadyAtTime = state.time;
+  }
+
   pushHistory(state, {
     t: state.time,
     eIn: eInput,
@@ -505,40 +567,8 @@ export function step(state: SimState, substeps = 1) {
     maxDeltaT,
   });
 
-  // Steady-state detection — both criteria must hold over a sliding window of
-  // length W = params.steadyWindow:
-  //   (1) energy:  |⟨dE_stored/dt⟩_W| / heaterPower < 1%
-  //   (2) spatial: |ΔT_min| / max(T_max − T_amb, 1)  < 1%
-  // The energy check alone false-positives for low-α materials (e.g. carbon
-  // steel) once the heater is cycling but the rim is still slowly warming up:
-  // cycle-averaged dE/dt is small while the spatial gradient is far from
-  // settled. T_min is the slowest-evolving point (rim, adiabatic, longest
-  // diffusion path), so requiring its drift to be small relative to the
-  // overall ΔT scale catches that transient. The startup case (T_min still =
-  // T_amb, ΔT_min = 0) is naturally excluded because the energy criterion
-  // fails while the heater is dumping full power into the pan.
-  if (!state.steady) {
-    const heaterP = params.heaterPower;
-    const W = Math.max(1, params.steadyWindow);
-    if (heaterP > 0 && state.time >= W) {
-      const targetT = state.time - W;
-      const h = state.history;
-      let i = h.length - 1;
-      while (i > 0 && h[i].t > targetT) i--;
-      const old = h[i];
-      const dT = state.time - old.t;
-      if (dT >= W) {
-        const avgRate = (eStored - old.eStored) / dT; // W
-        const energyNorm = Math.abs(avgRate) / heaterP;
-        const Tspan = Math.max(Tmax - Tamb, 1);
-        const spatialNorm = Math.abs(Tmin - old.Tmin) / Tspan;
-        if (energyNorm < 0.01 && spatialNorm < 0.01) {
-          state.steady = true;
-          state.steadyAtTime = state.time;
-        }
-      }
-    }
-  }
+  // (Steady-state detection happens at heater rising-edges inside the substep
+  // loop above — see the cycle-tracking block.)
 }
 
 // Thomas algorithm for tridiagonal A·x = d.

@@ -8,6 +8,8 @@ interface Props {
   height?: number;
   maillardC?: number;
   searingC?: number;
+  // Force a shared y range across cards (in °C). Markers are still kept inside.
+  yRangeCOverride?: { min: number; max: number };
 }
 
 const COL = {
@@ -25,6 +27,7 @@ export function TempHistoryChart({
   height = 140,
   maillardC = 140,
   searingC = 200,
+  yRangeCOverride,
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -48,15 +51,24 @@ export function TempHistoryChart({
     const hist = state?.history ?? [];
     const tMax = Math.max(1e-3, hist.length > 0 ? hist[hist.length - 1].t : 0);
 
-    // y range — must cover data + both markers, with a touch of headroom
+    // y range — must cover data + both markers, with a touch of headroom.
+    // When an override is supplied (sync-scales mode), seed with the override
+    // and still extend to keep the markers visible.
     const initialC = initialTempK - 273.15;
-    let yMinC = Math.min(initialC, maillardC, searingC);
-    let yMaxC = Math.max(initialC + 50, maillardC, searingC);
-    for (const s of hist) {
-      const minC = s.Tmin - 273.15;
-      const maxC = s.Tmax - 273.15;
-      if (minC < yMinC) yMinC = minC;
-      if (maxC > yMaxC) yMaxC = maxC;
+    let yMinC: number;
+    let yMaxC: number;
+    if (yRangeCOverride) {
+      yMinC = Math.min(yRangeCOverride.min, maillardC, searingC);
+      yMaxC = Math.max(yRangeCOverride.max, maillardC, searingC);
+    } else {
+      yMinC = Math.min(initialC, maillardC, searingC);
+      yMaxC = Math.max(initialC + 50, maillardC, searingC);
+      for (const s of hist) {
+        const minC = s.Tmin - 273.15;
+        const maxC = s.Tmax - 273.15;
+        if (minC < yMinC) yMinC = minC;
+        if (maxC > yMaxC) yMaxC = maxC;
+      }
     }
     yMinC = Math.floor(yMinC / 10) * 10 - 10;
     yMaxC = Math.ceil(yMaxC / 10) * 10 + 10;
@@ -90,13 +102,26 @@ export function TempHistoryChart({
 
     if (hist.length < 2) return;
 
+    // Draw order matters: when the heater is a ring, the pan center is often
+    // the coldest top-surface point, so T_min and T_center coincide. We paint
+    // T_min last so the blue line stays visible in that case.
     drawSeries(ctx, hist, xOf, yOf, (s) => s.Tmax - 273.15, COL.max);
-    drawSeries(ctx, hist, xOf, yOf, (s) => s.Tmin - 273.15, COL.min);
     drawSeries(ctx, hist, xOf, yOf, (s) => s.Tcenter - 273.15, COL.center);
+    drawSeries(ctx, hist, xOf, yOf, (s) => s.Tmin - 273.15, COL.min);
     // history.length is the per-tick signal that retriggers this effect; the
     // SimState reference itself is stable across renders so we can't depend on
     // it directly.
-  }, [state, state?.history.length, width, height, maillardC, searingC, initialTempK]);
+  }, [
+    state,
+    state?.history.length,
+    width,
+    height,
+    maillardC,
+    searingC,
+    initialTempK,
+    yRangeCOverride?.min,
+    yRangeCOverride?.max,
+  ]);
 
   return <canvas ref={ref} />;
 }

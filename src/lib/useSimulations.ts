@@ -16,7 +16,6 @@ export interface SimInput {
   nr: number; // radial cells
   nzPerLayer: number; // axial cells per material layer
   dt: number; // s — Crank–Nicolson time step
-  steadyWindow: number; // s — sliding window for steady-state detection
 }
 
 export interface SimSnapshot {
@@ -51,7 +50,6 @@ export function useSimulations(
           nr: inp.nr,
           nzPerLayer: inp.nzPerLayer,
           dt: inp.dt,
-          steadyWindow: inp.steadyWindow,
           initialTemp: inp.initialTemp,
         }),
       );

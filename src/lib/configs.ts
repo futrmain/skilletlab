@@ -27,14 +27,14 @@ const L = (name: string, thickness: number): Layer => ({
 export const PAN_TEMPLATES: PanConfig[] = [
   {
     id: "tpl-tri-ply",
-    name: "Tri-Ply Stainless 26cm",
-    diameter: 0.26,
+    name: "Tri-Ply Stainless 28cm",
+    diameter: 0.28,
     layers: [L("Stainless 304", 0.0005), L("Aluminum", 0.004), L("Stainless 304", 0.0005)],
   },
   {
     id: "tpl-cast-iron",
-    name: "Cast Iron Skillet 26cm",
-    diameter: 0.26,
+    name: "Cast Iron Skillet 28cm",
+    diameter: 0.28,
     layers: [L("Cast Iron", 0.005)],
   },
   {
@@ -45,8 +45,8 @@ export const PAN_TEMPLATES: PanConfig[] = [
   },
   {
     id: "tpl-copper-core",
-    name: "Copper Core 24cm",
-    diameter: 0.24,
+    name: "Copper Core 28cm",
+    diameter: 0.28,
     layers: [
       L("Stainless 304", 0.0005),
       L("Copper", 0.002),
@@ -92,8 +92,8 @@ export const HEATER_TEMPLATES: HeaterConfig[] = [
   },
   {
     id: "tpl-induction",
-    name: "Induction hob 21cm",
-    diameter: 0.18,
+    name: "Induction hob 15cm",
+    diameter: 0.15,
     thickness: 0.02,
     power: 2200,
     setpointHigh: 300,
@@ -110,8 +110,8 @@ export const HEATER_TEMPLATES: HeaterConfig[] = [
   },
 ];
 
-const PAN_KEY = "skillet.pans.v1";
-const HEATER_KEY = "skillet.heaters.v3";
+const PAN_KEY = "skillet.pans.v2";
+const HEATER_KEY = "skillet.heaters.v4";
 
 function load<T>(key: string, fallback: T[]): T[] {
   if (typeof window === "undefined") return fallback;

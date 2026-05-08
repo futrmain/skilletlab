@@ -22,6 +22,10 @@ interface Props {
   onHeaterChange: (id: string) => void;
   state: SimState | null;
   initialTempK: number;
+  // Optional overrides that force a shared scale across cards (Kelvin for
+  // PanView/ProfileChart, Celsius for the time-history chart).
+  profileRangeOverride?: { min: number; max: number };
+  historyRangeCOverride?: { min: number; max: number };
   onRemove?: () => void;
   removable?: boolean;
 }
@@ -35,6 +39,8 @@ export function SimCard({
   onHeaterChange,
   state,
   initialTempK,
+  profileRangeOverride,
+  historyRangeCOverride,
   onRemove,
   removable,
 }: Props) {
@@ -51,14 +57,22 @@ export function SimCard({
 
   const Tarr = state?.T ?? new Float64Array([initialTempK]);
   const Rarr = state?.r ?? new Float64Array([0]);
-  const tMinK = initialTempK;
+  let tMinK = initialTempK;
   let tMaxK = tMinK + 1;
   for (let i = 0; i < Tarr.length; i++) if (Tarr[i] > tMaxK) tMaxK = Tarr[i];
   tMaxK = Math.max(tMaxK, tMinK + 50);
+  if (profileRangeOverride) {
+    tMinK = profileRangeOverride.min;
+    tMaxK = profileRangeOverride.max;
+  }
 
+  // Stats below the chart should always reflect the actual values for this pan,
+  // not the synced scale.
   const centerC = Tarr[0] - 273.15;
   const edgeC = Tarr[Tarr.length - 1] - 273.15;
-  const peakC = tMaxK - 273.15;
+  let peakC = -Infinity;
+  for (let i = 0; i < Tarr.length; i++) if (Tarr[i] > peakC) peakC = Tarr[i];
+  peakC = (Number.isFinite(peakC) ? peakC : initialTempK) - 273.15;
 
   return (
     <section className="panel p-5 space-y-4 min-w-[340px] xl:min-w-[680px] flex-1">
@@ -102,22 +116,16 @@ export function SimCard({
         )}
       </div>
 
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">
-          t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
-        </span>
-        {state?.steady ? (
-          <span
-            className="text-emerald-400 font-mono"
-            title={`Energy: |⟨dE_stored/dt⟩_${state.params.steadyWindow}s| / heaterPower < 1%  AND  Spatial: |ΔT_min| / (T_max − T_amb) < 1%`}
-          >
-            ● Steady at {state.steadyAtTime?.toFixed(1) ?? "—"}s
+      <div className="space-y-1 text-xs">
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">
+            t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
           </span>
-        ) : (
           <span className="text-muted-foreground">
             {(pan.diameter * 100).toFixed(0)} cm · {heater.power} W
           </span>
-        )}
+        </div>
+        <ProgressIndicators state={state} />
       </div>
 
       <div className="flex justify-center">
@@ -152,7 +160,13 @@ export function SimCard({
             <div className="label-tag">Top surface vs time</div>
             <TempHistoryLegend />
           </div>
-          <TempHistoryChart state={state} initialTempK={initialTempK} width={300} height={140} />
+          <TempHistoryChart
+            state={state}
+            initialTempK={initialTempK}
+            yRangeCOverride={historyRangeCOverride}
+            width={300}
+            height={140}
+          />
         </div>
       </div>
 
@@ -162,6 +176,30 @@ export function SimCard({
         <Stat label="Peak" value={`${peakC.toFixed(0)}°`} />
       </div>
     </section>
+  );
+}
+
+function ProgressIndicators({ state }: { state: SimState | null }) {
+  const t = state?.time ?? 0;
+  const cookingDone = state?.cookingReadyAtTime != null;
+  const cookingTime = cookingDone ? (state?.cookingReadyAtTime ?? 0) : t;
+  const steadyDone = state?.steady === true;
+  const steadyTime = steadyDone ? (state?.steadyAtTime ?? 0) : t;
+  return (
+    <div className="flex flex-col gap-0.5 font-mono">
+      <span
+        className={cookingDone ? "text-emerald-400" : "text-muted-foreground"}
+        title="T_min on the top surface ≥ 200°C (searing threshold)"
+      >
+        ● Cooking ready = {cookingTime.toFixed(1)}s
+      </span>
+      <span
+        className={steadyDone ? "text-emerald-400" : "text-muted-foreground"}
+        title="avg(T_min) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+      >
+        ● Steady state = {steadyTime.toFixed(1)}s
+      </span>
+    </div>
   );
 }
 
