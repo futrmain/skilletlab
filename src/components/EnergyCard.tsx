@@ -97,6 +97,14 @@ export function EnergyCard({
       <div className="flex items-center justify-between text-xs">
         <span className="text-muted-foreground">
           t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
+          {state?.steady && (
+            <span
+              className="ml-2 text-emerald-400 font-mono"
+              title={`Energy: |⟨dE_stored/dt⟩_${state.params.steadyWindow}s| / heaterPower < 1%  AND  Spatial: |ΔT_min| / (T_max − T_amb) < 1%`}
+            >
+              ● Steady at {state.steadyAtTime?.toFixed(1) ?? "—"}s
+            </span>
+          )}
         </span>
         <Legend />
       </div>

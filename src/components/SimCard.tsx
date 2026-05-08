@@ -106,9 +106,18 @@ export function SimCard({
         <span className="text-muted-foreground">
           t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
         </span>
-        <span className="text-muted-foreground">
-          {(pan.diameter * 100).toFixed(0)} cm · {heater.power} W
-        </span>
+        {state?.steady ? (
+          <span
+            className="text-emerald-400 font-mono"
+            title={`Energy: |⟨dE_stored/dt⟩_${state.params.steadyWindow}s| / heaterPower < 1%  AND  Spatial: |ΔT_min| / (T_max − T_amb) < 1%`}
+          >
+            ● Steady at {state.steadyAtTime?.toFixed(1) ?? "—"}s
+          </span>
+        ) : (
+          <span className="text-muted-foreground">
+            {(pan.diameter * 100).toFixed(0)} cm · {heater.power} W
+          </span>
+        )}
       </div>
 
       <div className="flex justify-center">

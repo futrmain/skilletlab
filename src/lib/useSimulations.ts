@@ -16,6 +16,7 @@ export interface SimInput {
   nr: number; // radial cells
   nzPerLayer: number; // axial cells per material layer
   dt: number; // s — Crank–Nicolson time step
+  steadyWindow: number; // s — sliding window for steady-state detection
 }
 
 export interface SimSnapshot {
@@ -50,6 +51,7 @@ export function useSimulations(
           nr: inp.nr,
           nzPerLayer: inp.nzPerLayer,
           dt: inp.dt,
+          steadyWindow: inp.steadyWindow,
           initialTemp: inp.initialTemp,
         }),
       );
@@ -63,6 +65,7 @@ export function useSimulations(
     let raf = 0;
     const loop = () => {
       for (const st of statesRef.current.values()) {
+        if (st.steady) continue; // freeze sims that have hit the steady-state criterion
         const target = 0.05;
         const sub = Math.max(1, Math.floor(target / st.dt));
         step(st, Math.min(sub, 5000));

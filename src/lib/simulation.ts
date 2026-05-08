@@ -67,6 +67,7 @@ export interface SimParams {
   nr: number; // number of radial cells
   nzPerLayer: number; // axial cells per material layer (>=1)
   dt: number; // s — Crank–Nicolson time step (user-controlled, accuracy-bounded)
+  steadyWindow: number; // s — sliding window for steady-state detection
 }
 
 export interface SimState {
@@ -98,6 +99,9 @@ export interface SimState {
   // CN diagnostics (mesh+material+dt only — known at setup)
   maxFoR: number; // max α·dt/dr² across cells
   maxFoZ: number; // max α·dt/dz² across cells
+  // Steady-state detection: |⟨dE_stored/dt⟩_10s| / heaterPower < 0.01
+  steady: boolean;
+  steadyAtTime: number | null; // sim time at which the criterion first fired
   // ADI scratch buffers
   Tstar: Float64Array; // length Nr*Nz — intermediate field after half-step 1
   hTopBuf: Float64Array; // length Nr — H_top[i] = (h_conv + hRad(T_n))·ringArea[i]
@@ -251,6 +255,8 @@ export function initSim(params: SimParams): SimState {
     epsTop,
     maxFoR,
     maxFoZ,
+    steady: false,
+    steadyAtTime: null,
     Tstar: new Float64Array(nr * Nz),
     hTopBuf: new Float64Array(nr),
     TnTopBuf: new Float64Array(nr),
@@ -498,6 +504,41 @@ export function step(state: SimState, substeps = 1) {
     Tmin,
     maxDeltaT,
   });
+
+  // Steady-state detection — both criteria must hold over a sliding window of
+  // length W = params.steadyWindow:
+  //   (1) energy:  |⟨dE_stored/dt⟩_W| / heaterPower < 1%
+  //   (2) spatial: |ΔT_min| / max(T_max − T_amb, 1)  < 1%
+  // The energy check alone false-positives for low-α materials (e.g. carbon
+  // steel) once the heater is cycling but the rim is still slowly warming up:
+  // cycle-averaged dE/dt is small while the spatial gradient is far from
+  // settled. T_min is the slowest-evolving point (rim, adiabatic, longest
+  // diffusion path), so requiring its drift to be small relative to the
+  // overall ΔT scale catches that transient. The startup case (T_min still =
+  // T_amb, ΔT_min = 0) is naturally excluded because the energy criterion
+  // fails while the heater is dumping full power into the pan.
+  if (!state.steady) {
+    const heaterP = params.heaterPower;
+    const W = Math.max(1, params.steadyWindow);
+    if (heaterP > 0 && state.time >= W) {
+      const targetT = state.time - W;
+      const h = state.history;
+      let i = h.length - 1;
+      while (i > 0 && h[i].t > targetT) i--;
+      const old = h[i];
+      const dT = state.time - old.t;
+      if (dT >= W) {
+        const avgRate = (eStored - old.eStored) / dT; // W
+        const energyNorm = Math.abs(avgRate) / heaterP;
+        const Tspan = Math.max(Tmax - Tamb, 1);
+        const spatialNorm = Math.abs(Tmin - old.Tmin) / Tspan;
+        if (energyNorm < 0.01 && spatialNorm < 0.01) {
+          state.steady = true;
+          state.steadyAtTime = state.time;
+        }
+      }
+    }
+  }
 }
 
 // Thomas algorithm for tridiagonal A·x = d.

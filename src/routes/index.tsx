@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,6 +47,7 @@ function Index() {
   const [nrCells, setNrCells] = useState(120);
   const [nzPerLayer, setNzPerLayer] = useState(1);
   const [dtSec, setDtSec] = useState(0.05);
+  const [steadyWindowSec, setSteadyWindowSec] = useState(30);
   const [running, setRunning] = useState(false);
   const [resetSignal, setResetSignal] = useState(0);
 
@@ -86,14 +87,31 @@ function Index() {
           nr: nrCells,
           nzPerLayer,
           dt: dtSec,
+          steadyWindow: steadyWindowSec,
         },
       ];
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(filledSlots), pans, heaters, ambient, hConv, nrCells, nzPerLayer, dtSec]);
+  }, [
+    JSON.stringify(filledSlots),
+    pans,
+    heaters,
+    ambient,
+    hConv,
+    nrCells,
+    nzPerLayer,
+    dtSec,
+    steadyWindowSec,
+  ]);
 
   const snapshots = useSimulations(inputs, running, resetSignal);
   const snapByKey = new Map(snapshots.map((s) => [s.key, s]));
+
+  // Auto-stop the run loop when every active sim has hit its steady-state criterion.
+  const allSteady = snapshots.length > 0 && snapshots.every((s) => s.state?.steady === true);
+  useEffect(() => {
+    if (running && allSteady) setRunning(false);
+  }, [running, allSteady]);
 
   const updateSlot = (key: string, patch: Partial<SimSlot>) =>
     setSlots((ss) => ss.map((s) => (s.key === key ? { ...s, ...patch } : s)));
@@ -326,12 +344,37 @@ function Index() {
               max={5}
               onChange={setDtSec}
             />
+            <NumberField
+              label="Steady-state window (s)"
+              value={steadyWindowSec}
+              step={5}
+              min={1}
+              max={600}
+              onChange={setSteadyWindowSec}
+            />
             <p className="text-xs text-muted-foreground pt-2">
               The solver is a 2D axisymmetric finite-volume scheme on a (z, r) grid, integrated in
               time with implicit Crank–Nicolson via Peaceman–Rachford ADI (each half-step is a
               tridiagonal solve). The scheme is unconditionally stable, so dt is bounded by
               accuracy, not stability — too large a step can ring around the heater
               cut-off/re-ignite events. Changes restart the simulation.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Steady-state criterion (both must hold over the window{" "}
+              <span className="font-mono">W</span>):
+              <br />• Energy:{" "}
+              <span className="font-mono">|⟨dE_stored/dt⟩_W| / heaterPower &lt; 1%</span> — input
+              and output balanced.
+              <br />• Spatial: <span className="font-mono">
+                |ΔT_min| / (T_max − T_amb) &lt; 1%
+              </span>{" "}
+              — the rim (slowest point) has stopped drifting relative to the overall ΔT scale.
+              Required because for low-α materials (carbon steel, stainless) the energy check alone
+              fires early once the heater starts cycling while the rim is still warming up.
+              <br />
+              Each simulation freezes when both fire; the run loop stops when all simulations are
+              steady. Pick a window long enough to span a few hysteresis cycles — too short and
+              limit-cycle swings register as activity; too long and detection lags.
             </p>
           </section>
 
