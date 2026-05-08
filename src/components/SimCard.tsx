@@ -11,7 +11,7 @@ import { ProfileChart } from "./ProfileChart";
 import { TempHistoryChart } from "./TempHistoryChart";
 import { type SimState } from "@/lib/simulation";
 import { type PanConfig, type HeaterConfig } from "@/lib/configs";
-import { X } from "lucide-react";
+import { Pause, Play, RotateCcw, X } from "lucide-react";
 
 interface Props {
   pans: PanConfig[];
@@ -26,6 +26,11 @@ interface Props {
   // PanView/ProfileChart, Celsius for the time-history chart).
   profileRangeOverride?: { min: number; max: number };
   historyRangeCOverride?: { min: number; max: number };
+  // Per-card simulation control.
+  running: boolean;
+  onRun: () => void;
+  onPause: () => void;
+  onReset: () => void;
   onRemove?: () => void;
   removable?: boolean;
 }
@@ -41,6 +46,10 @@ export function SimCard({
   initialTempK,
   profileRangeOverride,
   historyRangeCOverride,
+  running,
+  onRun,
+  onPause,
+  onReset,
   onRemove,
   removable,
 }: Props) {
@@ -116,13 +125,41 @@ export function SimCard({
         )}
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        {(() => {
+          const steady = state?.steady === true;
+          if (steady) {
+            return (
+              <Button size="sm" variant="ghost" disabled className="h-8">
+                <Play className="w-3 h-3 mr-1.5" /> Steady
+              </Button>
+            );
+          }
+          if (running) {
+            return (
+              <Button size="sm" variant="secondary" onClick={onPause} className="h-8">
+                <Pause className="w-3 h-3 mr-1.5" /> Pause
+              </Button>
+            );
+          }
+          return (
+            <Button size="sm" onClick={onRun} className="h-8">
+              <Play className="w-3 h-3 mr-1.5" /> Run
+            </Button>
+          );
+        })()}
+        <Button size="sm" variant="outline" onClick={onReset} className="h-8">
+          <RotateCcw className="w-3 h-3 mr-1.5" /> Reset
+        </Button>
+        <span className="text-xs text-muted-foreground ml-auto">
+          {(pan.diameter * 100).toFixed(0)} cm · {heater.power} W
+        </span>
+      </div>
+
       <div className="space-y-1 text-xs">
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">
             t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
-          </span>
-          <span className="text-muted-foreground">
-            {(pan.diameter * 100).toFixed(0)} cm · {heater.power} W
           </span>
         </div>
         <ProgressIndicators state={state} />

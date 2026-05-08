@@ -16,16 +16,7 @@ interface Props {
   tick?: number;
 }
 
-export function ProfileChart({
-  T,
-  r,
-  tMin,
-  tMax,
-  width = 380,
-  height = 180,
-  rOuter,
-  tick,
-}: Props) {
+export function ProfileChart({ T, r, tMin, tMax, width = 380, height = 180, rOuter, tick }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current;

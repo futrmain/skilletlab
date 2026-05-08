@@ -40,6 +40,8 @@ interface SimSlot {
   key: string;
   panId: string;
   heaterId: string;
+  running: boolean;
+  resetTick: number;
 }
 
 function Index() {
@@ -52,12 +54,22 @@ function Index() {
   const [nzPerLayer, setNzPerLayer] = useState(1);
   const [dtSec, setDtSec] = useState(0.05);
   const [syncScales, setSyncScales] = useState(true);
-  const [running, setRunning] = useState(false);
-  const [resetSignal, setResetSignal] = useState(0);
 
   const [slots, setSlots] = useState<SimSlot[]>(() => [
-    { key: uid(), panId: "tpl-tri-ply", heaterId: "tpl-induction" },
-    { key: uid(), panId: "tpl-cast-iron", heaterId: "tpl-induction" },
+    {
+      key: uid(),
+      panId: "tpl-tri-ply",
+      heaterId: "tpl-induction",
+      running: false,
+      resetTick: 0,
+    },
+    {
+      key: uid(),
+      panId: "tpl-cast-iron",
+      heaterId: "tpl-induction",
+      running: false,
+      resetTick: 0,
+    },
   ]);
 
   // Default-fill missing pan/heater ids when configs become available
@@ -89,20 +101,39 @@ function Index() {
           nr: nrCells,
           nzPerLayer,
           dt: dtSec,
+          running: s.running,
+          resetTick: s.resetTick,
         },
       ];
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(filledSlots), pans, heaters, ambient, hConv, nrCells, nzPerLayer, dtSec]);
 
-  const snapshots = useSimulations(inputs, running, resetSignal);
+  const snapshots = useSimulations(inputs);
   const snapByKey = new Map(snapshots.map((s) => [s.key, s]));
 
-  // Auto-stop the run loop when every active sim has hit its steady-state criterion.
-  const allSteady = snapshots.length > 0 && snapshots.every((s) => s.state?.steady === true);
+  // Whether any slot is actively being stepped right now (a running, non-steady slot).
+  const anyRunning = filledSlots.some((s) => {
+    const steady = snapByKey.get(s.key)?.state?.steady === true;
+    return s.running && !steady;
+  });
+
+  // Stop a slot's run flag once its sim reaches steady (UI cleanup).
   useEffect(() => {
-    if (running && allSteady) setRunning(false);
-  }, [running, allSteady]);
+    setSlots((ss) => {
+      let changed = false;
+      const next = ss.map((s) => {
+        const steady = snapByKey.get(s.key)?.state?.steady === true;
+        if (s.running && steady) {
+          changed = true;
+          return { ...s, running: false };
+        }
+        return s;
+      });
+      return changed ? next : ss;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(snapshots.map((s) => `${s.key}:${s.state?.steady}`))]);
 
   const updateSlot = (key: string, patch: Partial<SimSlot>) =>
     setSlots((ss) => ss.map((s) => (s.key === key ? { ...s, ...patch } : s)));
@@ -113,10 +144,35 @@ function Index() {
         key: uid(),
         panId: pans[0]?.id ?? "",
         heaterId: heaters[0]?.id ?? "",
+        running: false,
+        resetTick: 0,
       },
     ]);
   const removeSlot = (key: string) =>
     setSlots((s) => (s.length > 1 ? s.filter((x) => x.key !== key) : s));
+
+  // Per-slot run/pause/reset.
+  const runSlot = (key: string) =>
+    setSlots((ss) => ss.map((s) => (s.key === key ? { ...s, running: true } : s)));
+  const pauseSlot = (key: string) =>
+    setSlots((ss) => ss.map((s) => (s.key === key ? { ...s, running: false } : s)));
+  const resetSlot = (key: string) =>
+    setSlots((ss) =>
+      ss.map((s) => (s.key === key ? { ...s, running: false, resetTick: s.resetTick + 1 } : s)),
+    );
+
+  // Global helpers used by the main toolbar.
+  const runAll = () =>
+    setSlots((ss) =>
+      ss.map((s) => {
+        const steady = snapByKey.get(s.key)?.state?.steady === true;
+        return steady ? s : { ...s, running: true };
+      }),
+    );
+  const pauseAll = () =>
+    setSlots((ss) => ss.map((s) => (s.running ? { ...s, running: false } : s)));
+  const resetAll = () =>
+    setSlots((ss) => ss.map((s) => ({ ...s, running: false, resetTick: s.resetTick + 1 })));
 
   const initialTempK = ambient + 273.15;
 
@@ -197,12 +253,10 @@ function Index() {
 
         <TabsContent value="simulate" className="space-y-4">
           <Toolbar
-            running={running}
-            setRunning={setRunning}
-            onReset={() => {
-              setRunning(false);
-              setResetSignal((n) => n + 1);
-            }}
+            anyRunning={anyRunning}
+            onRunAll={runAll}
+            onPauseAll={pauseAll}
+            onResetAll={resetAll}
             onAdd={addSlot}
             ambient={ambient}
             hConv={hConv}
@@ -225,6 +279,10 @@ function Index() {
                 initialTempK={initialTempK}
                 profileRangeOverride={syncedProfileRange}
                 historyRangeCOverride={syncedHistRangeC}
+                running={s.running}
+                onRun={() => runSlot(s.key)}
+                onPause={() => pauseSlot(s.key)}
+                onReset={() => resetSlot(s.key)}
                 removable={filledSlots.length > 1}
                 onRemove={() => removeSlot(s.key)}
               />
@@ -234,12 +292,10 @@ function Index() {
 
         <TabsContent value="compare" className="space-y-6">
           <Toolbar
-            running={running}
-            setRunning={setRunning}
-            onReset={() => {
-              setRunning(false);
-              setResetSignal((n) => n + 1);
-            }}
+            anyRunning={anyRunning}
+            onRunAll={runAll}
+            onPauseAll={pauseAll}
+            onResetAll={resetAll}
             onAdd={addSlot}
             ambient={ambient}
             hConv={hConv}
@@ -271,8 +327,8 @@ function Index() {
               <section className="panel p-5 space-y-3">
                 <div className="label-tag">Cooking ready time</div>
                 <p className="text-xs text-muted-foreground">
-                  Time until the cooking-edge cell reaches the searing threshold (T_edge ≥
-                  200°C). Pans that haven&apos;t reached it yet show as a dashed placeholder.
+                  Time until the cooking-edge cell reaches the searing threshold (T_edge ≥ 200°C).
+                  Pans that haven&apos;t reached it yet show as a dashed placeholder.
                 </p>
                 <div className="overflow-x-auto">
                   <CompareCookingReadyBars
@@ -327,12 +383,10 @@ function Index() {
 
         <TabsContent value="energy" className="space-y-4">
           <Toolbar
-            running={running}
-            setRunning={setRunning}
-            onReset={() => {
-              setRunning(false);
-              setResetSignal((n) => n + 1);
-            }}
+            anyRunning={anyRunning}
+            onRunAll={runAll}
+            onPauseAll={pauseAll}
+            onResetAll={resetAll}
             onAdd={addSlot}
             ambient={ambient}
             hConv={hConv}
@@ -426,9 +480,8 @@ function Index() {
             <p className="text-xs text-muted-foreground">
               Steady-state criterion: track the average <span className="font-mono">T_edge</span>{" "}
               (top-surface cell at the cooking-zone outer edge) over each heater on/off cycle
-              (rising edge → rising edge). Once two complete cycles are in hand, compare
-              avg(T_edge) of the just-completed cycle to the cycle before it. If the relative
-              change is{" "}
+              (rising edge → rising edge). Once two complete cycles are in hand, compare avg(T_edge)
+              of the just-completed cycle to the cycle before it. If the relative change is{" "}
               <span className="font-mono">|Δavg(T_edge)| / avg(T_edge)_prev ≤ 2%</span>, the limit
               cycle has stabilised. Each simulation freezes when its criterion fires; the run loop
               stops when all simulations are steady. Requires the heater to actually cycle — if
@@ -495,16 +548,18 @@ function Index() {
 }
 
 function Toolbar({
-  running,
-  setRunning,
-  onReset,
+  anyRunning,
+  onRunAll,
+  onPauseAll,
+  onResetAll,
   onAdd,
   ambient,
   hConv,
 }: {
-  running: boolean;
-  setRunning: (b: boolean) => void;
-  onReset: () => void;
+  anyRunning: boolean;
+  onRunAll: () => void;
+  onPauseAll: () => void;
+  onResetAll: () => void;
   onAdd: () => void;
   ambient: number;
   hConv: number;
@@ -512,11 +567,16 @@ function Toolbar({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button
-        onClick={() => setRunning(!running)}
+        onClick={anyRunning ? onPauseAll : onRunAll}
         size="lg"
-        variant={running ? "secondary" : "default"}
+        variant={anyRunning ? "secondary" : "default"}
+        title={
+          anyRunning
+            ? "Pause every simulation that is currently running"
+            : "Run every simulation that has not yet reached steady state"
+        }
       >
-        {running ? (
+        {anyRunning ? (
           <>
             <Pause className="w-4 h-4 mr-2" /> Pause
           </>
@@ -526,7 +586,7 @@ function Toolbar({
           </>
         )}
       </Button>
-      <Button onClick={onReset} size="lg" variant="outline">
+      <Button onClick={onResetAll} size="lg" variant="outline">
         <RotateCcw className="w-4 h-4 mr-2" /> Reset
       </Button>
       <Button onClick={onAdd} size="lg" variant="outline">
