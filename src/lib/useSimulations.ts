@@ -18,6 +18,17 @@ export interface SimInput {
   nr: number;
   nzPerLayer: number;
   dt: number;
+  // Steak — same field set as SimParams.
+  steakEnabled: boolean;
+  steakRadius: number;
+  steakThickness: number;
+  steakDensity: number;
+  steakCp: number;
+  steakK: number;
+  steakInitialTemp: number;
+  steakEmissivity: number;
+  nzSteak: number;
+  steakDoneTemp: number;
   running: boolean;
   resetTick: number;
 }

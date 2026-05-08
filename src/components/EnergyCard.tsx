@@ -128,6 +128,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
   const t = state?.time ?? 0;
   const cookingDone = state?.cookingReadyAtTime != null;
   const cookingTime = cookingDone ? (state?.cookingReadyAtTime ?? 0) : t;
+  const steakActive = state?.steakActive === true;
   const steadyDone = state?.steady === true;
   const steadyTime = steadyDone ? (state?.steadyAtTime ?? 0) : t;
   return (
@@ -140,7 +141,11 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
       </span>
       <span
         className={steadyDone ? "text-emerald-400" : "text-muted-foreground"}
-        title="avg(T_edge) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+        title={
+          steakActive
+            ? "Steak cooked throughout — the coldest cell reached the done temperature"
+            : "avg(T_edge) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+        }
       >
         ● Steady state = {steadyTime.toFixed(1)}s
       </span>

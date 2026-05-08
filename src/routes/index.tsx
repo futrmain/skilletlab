@@ -52,8 +52,16 @@ function Index() {
   const [hConv, setHConv] = useState(15);
   const [nrCells, setNrCells] = useState(120);
   const [nzPerLayer, setNzPerLayer] = useState(1);
+  const [nzSteak, setNzSteak] = useState(8);
   const [dtSec, setDtSec] = useState(0.05);
   const [syncScales, setSyncScales] = useState(true);
+  // Steak ("cooked food") global config — applies to every simulation slot.
+  const [steakEnabled, setSteakEnabled] = useState(true);
+  const [steakDiameterCm, setSteakDiameterCm] = useState(10);
+  const [steakThicknessCm, setSteakThicknessCm] = useState(3);
+  const [steakDensity, setSteakDensity] = useState(1050);
+  const [steakInitialTempC, setSteakInitialTempC] = useState(5);
+  const [steakDoneTempC, setSteakDoneTempC] = useState(55);
 
   const [slots, setSlots] = useState<SimSlot[]>(() => [
     {
@@ -101,13 +109,39 @@ function Index() {
           nr: nrCells,
           nzPerLayer,
           dt: dtSec,
+          steakEnabled,
+          steakRadius: steakDiameterCm / 2 / 100,
+          steakThickness: steakThicknessCm / 100,
+          steakDensity,
+          steakCp: 3500, // J/(kg·K) — typical raw beef
+          steakK: 0.48, // W/(m·K) — typical raw beef
+          steakInitialTemp: steakInitialTempC + 273.15,
+          steakEmissivity: 0.95,
+          nzSteak,
+          steakDoneTemp: steakDoneTempC + 273.15,
           running: s.running,
           resetTick: s.resetTick,
         },
       ];
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(filledSlots), pans, heaters, ambient, hConv, nrCells, nzPerLayer, dtSec]);
+  }, [
+    JSON.stringify(filledSlots),
+    pans,
+    heaters,
+    ambient,
+    hConv,
+    nrCells,
+    nzPerLayer,
+    nzSteak,
+    dtSec,
+    steakEnabled,
+    steakDiameterCm,
+    steakThicknessCm,
+    steakDensity,
+    steakInitialTempC,
+    steakDoneTempC,
+  ]);
 
   const snapshots = useSimulations(inputs);
   const snapByKey = new Map(snapshots.map((s) => [s.key, s]));
@@ -247,6 +281,7 @@ function Index() {
           <TabsTrigger value="pans">Pans ({pans.length})</TabsTrigger>
           <TabsTrigger value="heaters">Heaters ({heaters.length})</TabsTrigger>
           <TabsTrigger value="energy">Energy balance</TabsTrigger>
+          <TabsTrigger value="cooking">Cooking</TabsTrigger>
           <TabsTrigger value="environment">Environment</TabsTrigger>
           <TabsTrigger value="solver">Solver</TabsTrigger>
         </TabsList>
@@ -443,6 +478,81 @@ function Index() {
           </section>
         </TabsContent>
 
+        <TabsContent value="cooking">
+          <section className="panel p-5 max-w-md space-y-3">
+            <div className="label-tag mb-2">Steak (applies to all simulations)</div>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground select-none cursor-pointer w-fit">
+              <Checkbox
+                checked={steakEnabled}
+                onCheckedChange={(v) => setSteakEnabled(v === true)}
+              />
+              Drop a steak when the pan reaches steady state
+            </label>
+            <NumberField
+              label="Diameter (cm)"
+              value={steakDiameterCm}
+              step={0.5}
+              min={1}
+              max={40}
+              onChange={setSteakDiameterCm}
+            />
+            <NumberField
+              label="Thickness (cm)"
+              value={steakThicknessCm}
+              step={0.1}
+              min={0.5}
+              max={10}
+              onChange={setSteakThicknessCm}
+            />
+            <NumberField
+              label="Density (kg/m³)"
+              value={steakDensity}
+              step={10}
+              min={500}
+              max={1500}
+              onChange={setSteakDensity}
+            />
+            <NumberField
+              label="Starting temperature (°C)"
+              value={steakInitialTempC}
+              step={1}
+              min={-20}
+              max={30}
+              onChange={setSteakInitialTempC}
+            />
+            <NumberField
+              label="Done temperature (°C)"
+              value={steakDoneTempC}
+              step={1}
+              min={30}
+              max={100}
+              onChange={setSteakDoneTempC}
+            />
+            <div className="text-xs text-muted-foreground pt-2">
+              Mass:{" "}
+              <span className="font-mono text-primary">
+                {(
+                  steakDensity *
+                  Math.PI *
+                  Math.pow(steakDiameterCm / 200, 2) *
+                  (steakThicknessCm / 100) *
+                  1000
+                ).toFixed(0)}{" "}
+                g
+              </span>{" "}
+              (ρ · π·R²·h, with R = D/2). Beef bulk properties (k = 0.48 W/m·K, c = 3500 J/kg·K, ε =
+              0.95) are baked in.
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The steak is modelled as an axisymmetric cylinder centred on the pan. It is dropped
+              onto the cooking surface the moment the pan first reaches its limit-cycle steady
+              state. The simulation continues until the steak is{" "}
+              <em>cooked throughout</em>, i.e. its coldest cell reaches the done temperature
+              above (≈ 50 °C rare, 55 °C medium-rare, 63 °C medium, 70 °C+ well-done).
+            </p>
+          </section>
+        </TabsContent>
+
         <TabsContent value="solver">
           <section className="panel p-5 max-w-md space-y-3">
             <div className="label-tag mb-2">Solver mesh (applies to all simulations)</div>
@@ -463,6 +573,14 @@ function Index() {
               onChange={setNzPerLayer}
             />
             <NumberField
+              label="Axial cells in steak"
+              value={nzSteak}
+              step={1}
+              min={1}
+              max={32}
+              onChange={setNzSteak}
+            />
+            <NumberField
               label="Time step dt (s)"
               value={dtSec}
               step={0.01}
@@ -478,15 +596,19 @@ function Index() {
               cut-off/re-ignite events. Changes restart the simulation.
             </p>
             <p className="text-xs text-muted-foreground">
-              Steady-state criterion: track the average <span className="font-mono">T_edge</span>{" "}
-              (top-surface cell at the cooking-zone outer edge) over each heater on/off cycle
-              (rising edge → rising edge). Once two complete cycles are in hand, compare avg(T_edge)
-              of the just-completed cycle to the cycle before it. If the relative change is{" "}
-              <span className="font-mono">|Δavg(T_edge)| / avg(T_edge)_prev ≤ 2%</span>, the limit
-              cycle has stabilised. Each simulation freezes when its criterion fires; the run loop
-              stops when all simulations are steady. Requires the heater to actually cycle — if
-              losses keep the pan below the cut-off temperature, no cycles complete and the
-              simulation never declares steady.
+              Stopping criterion (two phases when a steak is enabled):
+              <br />
+              <strong>Phase A</strong> — pan limit-cycle convergence. Track the average{" "}
+              <span className="font-mono">T_edge</span> (top-surface cell at the cooking-zone
+              outer edge) over each heater on/off cycle. When{" "}
+              <span className="font-mono">|Δavg(T_edge)| / avg(T_edge)_prev ≤ 2%</span>, the
+              limit cycle has stabilised. With no steak, this is the final criterion.
+              <br />
+              <strong>Phase B</strong> (only when a steak is enabled) — steak cooked through.
+              The steak is dropped at the end of Phase A and the simulation continues until the
+              coldest cell anywhere in the steak reaches the done temperature set on the
+              Cooking tab. <span className="font-mono">state.steady</span> latches at that
+              moment.
             </p>
           </section>
 

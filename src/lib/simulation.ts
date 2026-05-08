@@ -44,12 +44,19 @@
 // energies and the conservation residual  E_input − E_stored − E_lossConv − E_lossRad
 // (≈ floating-point round-off for this scheme) on a log-y axis.
 //
-// Steady-state detection — cycle-based. The heater hysteresis defines a natural
-// limit cycle: rising edge → rising edge bounds one full ON+OFF cycle. We
-// time-integrate T_edge (the top-surface cell at the cooking-zone outer edge,
-// i = nInner − 1) over each cycle; once two complete cycles are in hand, we
-// compare avg(T_edge)_last to avg(T_edge)_prev — when the relative change is
-// ≤ 2%, the limit cycle has stabilised and we latch state.steady = true.
+// Stopping criteria — two-phase when the steak is enabled, single-phase otherwise.
+// Phase A (always): the heater hysteresis defines a natural limit cycle. We
+//   time-integrate T_edge (the top-surface cell at the cooking-zone outer edge,
+//   i = nInner − 1) over each cycle; once two complete cycles are in hand, we
+//   compare avg(T_edge)_last vs avg(T_edge)_prev. When the relative change is
+//   ≤ 2 % the pan has reached steady state.
+// Phase B (steak enabled): once Phase A fires, the steak is dropped onto the
+//   pan and the simulation continues. The final stopping criterion becomes
+//   "the steak is cooked throughout" — i.e. the coldest cell anywhere in the
+//   steak reaches the user's done temperature (default ≈ 55 °C, medium-rare).
+//   That latches state.steady = true.
+// When the steak is disabled the Phase A latch is the final one (state.steady
+// fires immediately on the first cycle convergence).
 
 export interface Layer {
   name: string;
@@ -75,6 +82,19 @@ export interface SimParams {
   nr: number; // number of radial cells (target total — split between cooking zone and rim)
   nzPerLayer: number; // axial cells per material layer (>=1)
   dt: number; // s — Crank–Nicolson time step (user-controlled, accuracy-bounded)
+  // Steak (cooked food) — added at the centre of the pan once the pan reaches
+  // its first steady state. The steak is an axisymmetric cylinder placed on
+  // top of the cooking surface (z = H), r ∈ [0, steakRadius].
+  steakEnabled: boolean;
+  steakRadius: number; // m
+  steakThickness: number; // m
+  steakDensity: number; // kg/m³ — typical raw beef ≈ 1050
+  steakCp: number; // J/(kg·K) — typical raw beef ≈ 3500
+  steakK: number; // W/(m·K) — typical raw beef ≈ 0.48
+  steakInitialTemp: number; // K — fridge-cold default ≈ 5 °C → 278.15 K
+  steakEmissivity: number; // 0–1 — wet beef ≈ 0.95
+  nzSteak: number; // axial cells in the steak (≥1)
+  steakDoneTemp: number; // K — final stopping temperature for the steak's coldest cell (≈ 55 °C medium-rare)
 }
 
 export interface SimState {
@@ -121,6 +141,35 @@ export interface SimState {
   // "Cooking ready" — sim time at which T_edge on the top surface first reaches
   // the searing threshold (the cooking-edge cell is hot enough).
   cookingReadyAtTime: number | null;
+
+  // Steak ("cooked food") — placed on the pan at the centre once the pan
+  // first reaches steady state. Once active, the pan and steak are coupled
+  // explicitly through a contact face at z = H for cells under the steak.
+  steakActive: boolean; // true after the steak has been dropped
+  steakDroppedAt: number | null; // sim time when the steak was dropped (= first steady)
+  steakNr: number; // radial cells in the steak (= number of pan cells with rRight ≤ steakRadius)
+  steakNz: number; // axial cells in the steak
+  Tsteak: Float64Array; // length steakNr * steakNz, idx = k*steakNr + i (k axial, i radial)
+  TsteakStar: Float64Array; // ADI scratch
+  drSteak: number; // m — radial cell width (matches the pan's cooking-zone-A width)
+  dzSteak: number; // m — axial cell width
+  ringAreaSteak: Float64Array; // length steakNr — top/bottom face area per radial cell (= pan's ringArea[0..steakNr-1])
+  rSteakLeft: Float64Array; // length steakNr
+  rSteakRight: Float64Array; // length steakNr
+  kSteak: number;
+  rhoSteak: number;
+  cpSteakK: number; // (renamed to avoid clash with the pan `cp` Float64Array)
+  epsSteak: number;
+  steakInitialTempK: number; // reference for E_stored_steak
+  // Pan ↔ steak interface conductance per pan-top cell (W/K). Only non-zero
+  // for i < steakNr; computed as harmonic mean of half-cell pan conductivity
+  // and half-cell steak conductivity, scaled by ringArea.
+  gContactPerCell: Float64Array; // length Nr (zero outside the steak)
+  // Steak air-loss scratch (one buffer per face direction).
+  hSteakTopBuf: Float64Array; // length steakNr — top face Robin coefficient W/K (k = nzSteak-1)
+  TnSteakTopBuf: Float64Array; // T_n at steak top row
+  hSteakSideBuf: Float64Array; // length steakNz — outer-side face Robin (i = steakNr-1)
+  TnSteakSideBuf: Float64Array; // T_n at steak outer-side column
   // ADI scratch buffers
   Tstar: Float64Array; // length Nr*Nz — intermediate field after half-step 1
   hTopBuf: Float64Array; // length Nr — H_top[i] = (h_conv + hRad(T_n))·ringArea[i]
@@ -143,6 +192,8 @@ export interface SimState {
   initialTemp: number; // K — reference for E_stored = Σ ρcV (T - T_initial)
   history: HistorySample[]; // bounded; oldest decimated when full
   historyMax: number;
+  historyIntervalSec: number; // sim-time interval between history pushes (UI sampling rate)
+  lastHistoryTime: number; // sim time of the most recent push
 }
 
 export interface HistorySample {
@@ -207,19 +258,30 @@ export function initSim(params: SimParams): SimState {
   }
 
   // ---- Radial mesh -----------------------------------------------------
-  // Two regions: cooking zone [0, panRadius] and rim [panRadius, panRadius+rim].
-  // We split the user's `nr` target so a cell edge lands EXACTLY at panRadius.
+  // Up to three regions split by THREE candidate boundaries:
+  //   A: [0, steakRadius]              — cells under the (optional) steak
+  //   B: [steakRadius, panRadius]      — cooking zone outside the steak
+  //   C: [panRadius, panRadius+rim]    — rim flange (air below)
+  // Cell edges land EXACTLY at every internal boundary so coupling at
+  // steakRadius and panRadius is clean (no fractional overlap).
   const rimHeight = Math.max(0, params.rimHeight ?? 0);
+  const steakEnabledParam = !!params.steakEnabled;
+  const steakRadius =
+    steakEnabledParam && params.steakRadius > 0 ? Math.min(panRadius, params.steakRadius) : 0;
   const totalR = panRadius + rimHeight;
-  const nInner = totalR > 0 ? Math.max(1, Math.round((nr * panRadius) / totalR)) : nr;
-  let nOuter = 0;
-  const drInner = panRadius / nInner;
-  let drOuter = 0;
-  if (rimHeight > 0) {
-    nOuter = Math.max(1, Math.round(rimHeight / drInner));
-    drOuter = rimHeight / nOuter;
-  }
-  const Nr = nInner + nOuter;
+  // Aim for ~uniform Δr across regions.
+  const drTarget = totalR > 0 ? totalR / nr : 0;
+  const nA = steakRadius > 0 ? Math.max(1, Math.round(steakRadius / Math.max(drTarget, 1e-12))) : 0;
+  const drA = nA > 0 ? steakRadius / nA : 0;
+  const nB =
+    panRadius - steakRadius > 0
+      ? Math.max(1, Math.round((panRadius - steakRadius) / Math.max(drTarget, 1e-12)))
+      : 0;
+  const drB = nB > 0 ? (panRadius - steakRadius) / nB : 0;
+  const nC = rimHeight > 0 ? Math.max(1, Math.round(rimHeight / Math.max(drTarget, 1e-12))) : 0;
+  const drC = nC > 0 ? rimHeight / nC : 0;
+  const nInner = nA + nB;
+  const Nr = nA + nB + nC;
   const r = new Float64Array(Nr);
   const rLeft = new Float64Array(Nr);
   const rRight = new Float64Array(Nr);
@@ -230,21 +292,23 @@ export function initSim(params: SimParams): SimState {
   for (let i = 0; i < Nr; i++) {
     let rl: number;
     let rr: number;
-    if (i < nInner) {
-      rl = i * drInner;
-      rr = (i + 1) * drInner;
+    if (i < nA) {
+      rl = i * drA;
+      rr = (i + 1) * drA;
+    } else if (i < nA + nB) {
+      const j = i - nA;
+      rl = steakRadius + j * drB;
+      rr = steakRadius + (j + 1) * drB;
     } else {
-      const j = i - nInner;
-      rl = panRadius + j * drOuter;
-      rr = panRadius + (j + 1) * drOuter;
+      const j = i - nA - nB;
+      rl = panRadius + j * drC;
+      rr = panRadius + (j + 1) * drC;
       isExt[i] = 1;
     }
     rLeft[i] = rl;
     rRight[i] = rr;
     r[i] = (rl + rr) * 0.5;
     ringArea[i] = Math.PI * (rr * rr - rl * rl);
-    // Heater overlap: heater is clamped to the cooking zone (≤ panRadius),
-    // so rim cells never receive heater flux.
     if (i < nInner) {
       const a = Math.max(rl, ringIn);
       const b = Math.min(rr, ringOut);
@@ -254,15 +318,18 @@ export function initSim(params: SimParams): SimState {
     }
     totalHeatedArea += heatedArea[i];
   }
-  // Force the boundary cell edge to be exactly panRadius (avoids FP drift).
+  // Snap edges to exact boundaries (avoid FP drift).
+  if (nA > 0) rRight[nA - 1] = steakRadius;
+  if (nB > 0) rLeft[nA] = steakRadius;
   if (nInner > 0) rRight[nInner - 1] = panRadius;
-  if (nOuter > 0) rLeft[nInner] = panRadius;
-  // Distance between centers of cell i-1 and i (used as "dr" at the inner face of cell i).
+  if (nC > 0) rLeft[nInner] = panRadius;
   const drFace = new Float64Array(Nr);
-  for (let i = 1; i < Nr; i++) {
-    drFace[i] = r[i] - r[i - 1];
-  }
-  const drMin = Math.min(drInner, nOuter > 0 ? drOuter : drInner);
+  for (let i = 1; i < Nr; i++) drFace[i] = r[i] - r[i - 1];
+  const drMin = Math.min(
+    drA > 0 ? drA : Infinity,
+    drB > 0 ? drB : Infinity,
+    drC > 0 ? drC : Infinity,
+  );
 
   // ---- Field & view ----------------------------------------------------
   const T2D = new Float64Array(Nr * Nz);
@@ -278,7 +345,38 @@ export function initSim(params: SimParams): SimState {
 
   // CN is unconditionally stable — dt is the user-supplied accuracy step.
   const dt = Math.max(1e-6, params.dt);
-  const tdMax = Math.max(Nr, Nz);
+
+  // ---- Steak mesh (lazy: still allocated when steakEnabled, even though the
+  //      steak is dropped only after the pan reaches its first steady state.
+  //      A mesh allocated now is cheap and avoids an awkward re-init mid-run).
+  const steakNr = nA;
+  const steakNz = Math.max(1, Math.floor(params.nzSteak ?? 1));
+  const steakThickness = Math.max(0, params.steakThickness ?? 0);
+  const dzSteak = steakNz > 0 ? steakThickness / steakNz : 0;
+  const Tsteak = new Float64Array(steakNr * steakNz);
+  Tsteak.fill(params.steakInitialTemp);
+  const TsteakStar = new Float64Array(steakNr * steakNz);
+  const ringAreaSteak = new Float64Array(steakNr);
+  const rSteakLeft = new Float64Array(steakNr);
+  const rSteakRight = new Float64Array(steakNr);
+  for (let i = 0; i < steakNr; i++) {
+    rSteakLeft[i] = rLeft[i];
+    rSteakRight[i] = rRight[i];
+    ringAreaSteak[i] = ringArea[i];
+  }
+  // Contact conductance per cell (W/K): harmonic mean of half-cell pan
+  // conductivity (top axial layer) and half-cell steak conductivity, scaled
+  // by the cell's ring area at the contact face (z = H).
+  const gContactPerCell = new Float64Array(Nr);
+  if (steakEnabledParam && steakNr > 0 && Nz > 0 && steakNz > 0) {
+    const kPanTop = k[Nz - 1];
+    const kSteakLocal = Math.max(1e-6, params.steakK ?? 0.48);
+    const Rface = dz[Nz - 1] / (2 * kPanTop) + dzSteak / (2 * kSteakLocal); // m²K/W per unit area
+    for (let i = 0; i < steakNr; i++) {
+      gContactPerCell[i] = ringAreaSteak[i] / Rface;
+    }
+  }
+  const tdMax = Math.max(Nr, Nz, steakNz);
 
   // Per-cell Fourier numbers. Pure diffusion has no advective CFL; Fo gates
   // CN accuracy and ringing tendency, not stability. Use min Δr (across the
@@ -328,6 +426,27 @@ export function initSim(params: SimParams): SimState {
     lastCycleAvgTedge: null,
     prevCycleAvgTedge: null,
     cookingReadyAtTime: null,
+    steakActive: false,
+    steakDroppedAt: null,
+    steakNr,
+    steakNz,
+    Tsteak,
+    TsteakStar,
+    drSteak: drA,
+    dzSteak,
+    ringAreaSteak,
+    rSteakLeft,
+    rSteakRight,
+    kSteak: Math.max(1e-6, params.steakK ?? 0.48),
+    rhoSteak: Math.max(1e-6, params.steakDensity ?? 1050),
+    cpSteakK: Math.max(1e-6, params.steakCp ?? 3500),
+    epsSteak: params.steakEmissivity ?? 0.95,
+    steakInitialTempK: params.steakInitialTemp,
+    gContactPerCell,
+    hSteakTopBuf: new Float64Array(steakNr),
+    TnSteakTopBuf: new Float64Array(steakNr),
+    hSteakSideBuf: new Float64Array(steakNz),
+    TnSteakSideBuf: new Float64Array(steakNz),
     Tstar: new Float64Array(Nr * Nz),
     hTopBuf: new Float64Array(Nr),
     TnTopBuf: new Float64Array(Nr),
@@ -359,6 +478,8 @@ export function initSim(params: SimParams): SimState {
       },
     ],
     historyMax: 4000,
+    historyIntervalSec: 2.0,
+    lastHistoryTime: 0,
   };
 }
 
@@ -400,6 +521,24 @@ export function step(state: SimState, substeps = 1) {
     tdRhs,
     tdSol,
     tdCprime,
+    Tsteak,
+    TsteakStar,
+    steakNr,
+    steakNz,
+    drSteak,
+    dzSteak,
+    ringAreaSteak,
+    rSteakLeft,
+    rSteakRight,
+    kSteak,
+    rhoSteak,
+    cpSteakK,
+    epsSteak,
+    gContactPerCell,
+    hSteakTopBuf,
+    TnSteakTopBuf,
+    hSteakSideBuf,
+    TnSteakSideBuf,
   } = state;
   const Tamb = params.ambient;
   const hConv = params.hConv;
@@ -434,8 +573,23 @@ export function step(state: SimState, substeps = 1) {
         if (!state.steady && state.prevCycleAvgTedge !== null && state.prevCycleAvgTedge > 0) {
           const relChange = Math.abs(avgTedge - state.prevCycleAvgTedge) / state.prevCycleAvgTedge;
           if (relChange <= 0.02) {
-            state.steady = true;
-            state.steadyAtTime = state.time;
+            if (params.steakEnabled && !state.steakActive && steakNr > 0 && steakNz > 0) {
+              // Phase A → Phase B: drop the steak and keep simulating. The
+              // final stopping criterion is now "cooked throughout", checked
+              // after each substep below.
+              Tsteak.fill(params.steakInitialTemp);
+              state.steakActive = true;
+              state.steakDroppedAt = state.time;
+              state.lastCycleAvgTedge = null;
+              state.prevCycleAvgTedge = null;
+            } else if (!params.steakEnabled) {
+              // No steak phase — the pan's limit cycle is the final criterion.
+              state.steady = true;
+              state.steadyAtTime = state.time;
+            }
+            // else: steak active. Cycle criterion is no longer the stopping
+            // condition; "steak cooked through" is. Just let the loop keep
+            // running.
           }
         }
       }
@@ -496,9 +650,18 @@ export function step(state: SimState, substeps = 1) {
           rhs += Gtop * (T2D[idx + Nr] - T2D[idx]);
         }
         if (isTop) {
-          // Robin: −H·T (linear) + H·T_amb (source)
-          rhs -= hTopBuf[i] * T2D[idx];
-          rhs += hTopBuf[i] * Tamb;
+          if (state.steakActive && i < steakNr && gContactPerCell[i] > 0) {
+            // Contact with steak: replace air Robin with a constant source
+            // computed from the snapshotted T_n on both sides (explicit
+            // coupling — same source applied in BOTH half-steps so the total
+            // flux over a full step is dt · Q_contact_n).
+            const Qc = gContactPerCell[i] * (TnTopBuf[i] - Tsteak[i]);
+            rhs -= Qc;
+          } else {
+            // Air Robin: −H·T (linear) + H·T_amb (source)
+            rhs -= hTopBuf[i] * T2D[idx];
+            rhs += hTopBuf[i] * Tamb;
+          }
         }
         if (isBot) {
           if (heaterOn && heatedArea[i] > 0) {
@@ -533,10 +696,11 @@ export function step(state: SimState, substeps = 1) {
         const isTop = j === Nz - 1;
         const isBot = j === 0;
 
+        const useContact = state.steakActive && i < steakNr && gContactPerCell[i] > 0;
         tdSub[j] = -Gbot;
         tdSup[j] = -Gtop;
         let diag = rhocV_dt2 + Gbot + Gtop;
-        if (isTop) diag += hTopBuf[i];
+        if (isTop && !useContact) diag += hTopBuf[i];
         // Bottom Robin (rim cells only): on the diagonal in the implicit-z half.
         if (isBot && hBotBuf[i] > 0) diag += hBotBuf[i];
         tdDiag[j] = diag;
@@ -551,7 +715,14 @@ export function step(state: SimState, substeps = 1) {
           const Gout = (kj * TWO_PI * rRight[i] * dzj) / drFace[i + 1];
           rhs += Gout * (Tstar[idx + 1] - Tstar[idx]);
         }
-        if (isTop) rhs += hTopBuf[i] * Tamb;
+        if (isTop) {
+          if (useContact) {
+            const Qc = gContactPerCell[i] * (TnTopBuf[i] - Tsteak[i]);
+            rhs -= Qc;
+          } else {
+            rhs += hTopBuf[i] * Tamb;
+          }
+        }
         if (isBot) {
           if (heaterOn && heatedArea[i] > 0) rhs += qDensity * heatedArea[i];
           if (hBotBuf[i] > 0) rhs += hBotBuf[i] * Tamb;
@@ -570,16 +741,142 @@ export function step(state: SimState, substeps = 1) {
       }
     }
 
+    // ---- Steak ADI (only when active): half-step 1 implicit in r, then
+    //      half-step 2 implicit in k. Bottom face couples to the pan via the
+    //      same Q_contact_n(i) = G·(T_pan_n_top[i] − T_steak_n_bot[i]) source
+    //      that the pan saw, with the opposite sign — total interface flux
+    //      over a step = dt·Q_contact_n, internal between pan and steak.
+    if (state.steakActive && steakNr > 0 && steakNz > 0) {
+      // Linearise air-loss radiation at T_n on the steak's exposed faces and
+      // snapshot T_n for the energy tally.
+      for (let i = 0; i < steakNr; i++) {
+        const Tn = Tsteak[(steakNz - 1) * steakNr + i];
+        TnSteakTopBuf[i] = Tn;
+        const hRad = epsSteak * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
+        hSteakTopBuf[i] = (hConv + hRad) * ringAreaSteak[i];
+      }
+      const sideFaceArea = TWO_PI * rSteakRight[steakNr - 1] * dzSteak;
+      for (let kk = 0; kk < steakNz; kk++) {
+        const Tn = Tsteak[kk * steakNr + (steakNr - 1)];
+        TnSteakSideBuf[kk] = Tn;
+        const hRad = epsSteak * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
+        hSteakSideBuf[kk] = (hConv + hRad) * sideFaceArea;
+      }
+
+      const rcDzS = rhoSteak * cpSteakK * dzSteak;
+      // Half-step 1: implicit-r, explicit-k (one tridiag per row k, size steakNr).
+      for (let kk = 0; kk < steakNz; kk++) {
+        const isTopSteak = kk === steakNz - 1;
+        const isBotSteak = kk === 0;
+        for (let i = 0; i < steakNr; i++) {
+          const idx = kk * steakNr + i;
+          const A = ringAreaSteak[i];
+          const rhocV_dt2 = (rcDzS * A) / halfDt;
+          const Gin = i > 0 ? (kSteak * TWO_PI * rSteakLeft[i] * dzSteak) / drSteak : 0;
+          const Gout = i < steakNr - 1 ? (kSteak * TWO_PI * rSteakRight[i] * dzSteak) / drSteak : 0;
+
+          tdSub[i] = -Gin;
+          tdSup[i] = -Gout;
+          let diag = rhocV_dt2 + Gin + Gout;
+          // Outer-side air Robin (i = steakNr-1): on the diagonal in the implicit-r half.
+          if (i === steakNr - 1) diag += hSteakSideBuf[kk];
+          tdDiag[i] = diag;
+
+          let rhs = rhocV_dt2 * Tsteak[idx];
+          // Axial (k-direction) conduction at T_n (explicit).
+          if (kk > 0) {
+            const Gbot = (kSteak * A) / dzSteak;
+            rhs += Gbot * (Tsteak[idx - steakNr] - Tsteak[idx]);
+          }
+          if (kk < steakNz - 1) {
+            const Gtop = (kSteak * A) / dzSteak;
+            rhs += Gtop * (Tsteak[idx + steakNr] - Tsteak[idx]);
+          }
+          // Top air Robin (k = steakNz-1) at T_n.
+          if (isTopSteak) {
+            rhs -= hSteakTopBuf[i] * Tsteak[idx];
+            rhs += hSteakTopBuf[i] * Tamb;
+          }
+          // Outer-side air Robin source.
+          if (i === steakNr - 1) rhs += hSteakSideBuf[kk] * Tamb;
+          // Bottom contact source (k = 0): +Q_contact_n.
+          if (isBotSteak && gContactPerCell[i] > 0) {
+            const Qc = gContactPerCell[i] * (TnTopBuf[i] - Tsteak[i]);
+            rhs += Qc;
+          }
+          tdRhs[i] = rhs;
+        }
+        solveTridiag(tdSub, tdDiag, tdSup, tdRhs, tdSol, tdCprime, steakNr);
+        for (let i = 0; i < steakNr; i++) {
+          TsteakStar[kk * steakNr + i] = tdSol[i];
+        }
+      }
+
+      // Half-step 2: implicit-k, explicit-r (one tridiag per column i, size steakNz).
+      for (let i = 0; i < steakNr; i++) {
+        const A = ringAreaSteak[i];
+        const Gin = i > 0 ? (kSteak * TWO_PI * rSteakLeft[i] * dzSteak) / drSteak : 0;
+        const Gout = i < steakNr - 1 ? (kSteak * TWO_PI * rSteakRight[i] * dzSteak) / drSteak : 0;
+        for (let kk = 0; kk < steakNz; kk++) {
+          const idx = kk * steakNr + i;
+          const rhocV_dt2 = (rcDzS * A) / halfDt;
+          const Gbot = kk > 0 ? (kSteak * A) / dzSteak : 0;
+          const Gtop = kk < steakNz - 1 ? (kSteak * A) / dzSteak : 0;
+          const isTopSteak = kk === steakNz - 1;
+          const isBotSteak = kk === 0;
+
+          tdSub[kk] = -Gbot;
+          tdSup[kk] = -Gtop;
+          let diag = rhocV_dt2 + Gbot + Gtop;
+          if (isTopSteak) diag += hSteakTopBuf[i];
+          tdDiag[kk] = diag;
+
+          let rhs = rhocV_dt2 * TsteakStar[idx];
+          // Radial (i-direction) conduction at T* (explicit).
+          if (i > 0) {
+            rhs += Gin * (TsteakStar[idx - 1] - TsteakStar[idx]);
+          }
+          if (i < steakNr - 1) {
+            rhs += Gout * (TsteakStar[idx + 1] - TsteakStar[idx]);
+          }
+          // Top air Robin constant.
+          if (isTopSteak) rhs += hSteakTopBuf[i] * Tamb;
+          // Outer-side Robin in this half is explicit-r → put in RHS.
+          if (i === steakNr - 1) {
+            rhs -= hSteakSideBuf[kk] * TsteakStar[idx];
+            rhs += hSteakSideBuf[kk] * Tamb;
+          }
+          // Bottom contact source (same Qc as in HS1).
+          if (isBotSteak && gContactPerCell[i] > 0) {
+            const Qc = gContactPerCell[i] * (TnTopBuf[i] - Tsteak[i]);
+            rhs += Qc;
+          }
+          tdRhs[kk] = rhs;
+        }
+        solveTridiag(tdSub, tdDiag, tdSup, tdRhs, tdSol, tdCprime, steakNz);
+        for (let kk = 0; kk < steakNz; kk++) {
+          const idx = kk * steakNr + i;
+          const diff = tdSol[kk] - Tsteak[idx];
+          const ad = diff < 0 ? -diff : diff;
+          if (ad > maxDeltaT) maxDeltaT = ad;
+          Tsteak[idx] = tdSol[kk];
+        }
+      }
+    }
+
     // ---- Energy tally (trapezoidal — exact for the applied flux) ----
-    // Top face loss for every disc cell.
-    for (let i = 0; i < Nr; i++) {
-      const Tn = TnTopBuf[i];
-      const Tnp1 = T2D[topRowOff + i];
-      const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
-      const A = ringArea[i];
-      const hRad = (hTopBuf[i] - hConv * A) / A;
-      eLossConv += hConv * dTavg * A * dt;
-      eLossRad += hRad * dTavg * A * dt;
+    // Top face loss for pan cells NOT covered by the steak.
+    {
+      const skip = state.steakActive ? steakNr : 0;
+      for (let i = skip; i < Nr; i++) {
+        const Tn = TnTopBuf[i];
+        const Tnp1 = T2D[topRowOff + i];
+        const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
+        const A = ringArea[i];
+        const hRad = (hTopBuf[i] - hConv * A) / A;
+        eLossConv += hConv * dTavg * A * dt;
+        eLossRad += hRad * dTavg * A * dt;
+      }
     }
     // Bottom face loss for rim cells only.
     for (let i = nInner; i < Nr; i++) {
@@ -591,6 +888,27 @@ export function step(state: SimState, substeps = 1) {
       eLossConv += hConv * dTavg * A * dt;
       eLossRad += hRad * dTavg * A * dt;
     }
+    // Steak air-loss tally (top + outer side faces).
+    if (state.steakActive && steakNr > 0 && steakNz > 0) {
+      for (let i = 0; i < steakNr; i++) {
+        const Tn = TnSteakTopBuf[i];
+        const Tnp1 = Tsteak[(steakNz - 1) * steakNr + i];
+        const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
+        const A = ringAreaSteak[i];
+        const hRad = (hSteakTopBuf[i] - hConv * A) / A;
+        eLossConv += hConv * dTavg * A * dt;
+        eLossRad += hRad * dTavg * A * dt;
+      }
+      const sideArea = TWO_PI * rSteakRight[steakNr - 1] * dzSteak;
+      for (let kk = 0; kk < steakNz; kk++) {
+        const Tn = TnSteakSideBuf[kk];
+        const Tnp1 = Tsteak[kk * steakNr + (steakNr - 1)];
+        const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
+        const hRad = (hSteakSideBuf[kk] - hConv * sideArea) / sideArea;
+        eLossConv += hConv * dTavg * sideArea * dt;
+        eLossRad += hRad * dTavg * sideArea * dt;
+      }
+    }
 
     state.time += dt;
     eInput += heaterFactor * heaterPower * dt;
@@ -599,6 +917,19 @@ export function step(state: SimState, substeps = 1) {
     // and accumulate into the current cycle's integral.
     const TedgeSub = T2D[topRowOff + nInner - 1];
     state.cycleTedgeIntegral += TedgeSub * dt;
+
+    // Phase-B stopping criterion: the steak is cooked throughout when the
+    // coldest cell anywhere in the steak reaches the user's done temperature.
+    if (state.steakActive && !state.steady && steakNr > 0 && steakNz > 0) {
+      let TsteakMin = Infinity;
+      for (let ii = 0; ii < Tsteak.length; ii++) {
+        if (Tsteak[ii] < TsteakMin) TsteakMin = Tsteak[ii];
+      }
+      if (TsteakMin >= params.steakDoneTemp) {
+        state.steady = true;
+        state.steadyAtTime = state.time;
+      }
+    }
   }
 
   state.eInput = eInput;
@@ -606,17 +937,32 @@ export function step(state: SimState, substeps = 1) {
   state.eLossRad = eLossRad;
   state.heaterOn = heaterOn;
 
-  // E_stored = Σ_ij ρcV_ij · (T_ij - T_initial) at the new time
+  // E_stored = Σ ρcV · (T − T_ref) summed over both pan and (when active) steak.
+  // Pan cells reference the pan's initial temperature; steak cells reference
+  // the steak's initial temperature so eStored is monotonic — it has no jump
+  // at the moment the steak is dropped.
   let eStored = 0;
-  const T0 = state.initialTemp;
+  const T0pan = state.initialTemp;
   for (let j = 0; j < Nz; j++) {
     const rcDz = rho[j] * cp[j] * dz[j];
     const rowOff = j * Nr;
     let rowSum = 0;
     for (let i = 0; i < Nr; i++) {
-      rowSum += ringArea[i] * (T2D[rowOff + i] - T0);
+      rowSum += ringArea[i] * (T2D[rowOff + i] - T0pan);
     }
     eStored += rcDz * rowSum;
+  }
+  if (state.steakActive && steakNr > 0 && steakNz > 0) {
+    const T0s = state.steakInitialTempK;
+    const rcDzS = rhoSteak * cpSteakK * dzSteak;
+    for (let kk = 0; kk < steakNz; kk++) {
+      let rowSum = 0;
+      const rowOff = kk * steakNr;
+      for (let i = 0; i < steakNr; i++) {
+        rowSum += ringAreaSteak[i] * (Tsteak[rowOff + i] - T0s);
+      }
+      eStored += rcDzS * rowSum;
+    }
   }
 
   // Top-surface temperature stats at the new time. T_max scans only the cooking
@@ -639,17 +985,27 @@ export function step(state: SimState, substeps = 1) {
     state.cookingReadyAtTime = state.time;
   }
 
-  pushHistory(state, {
-    t: state.time,
-    eIn: eInput,
-    eStored,
-    eConv: eLossConv,
-    eRad: eLossRad,
-    Tcenter,
-    Tmax,
-    Tedge,
-    maxDeltaT,
-  });
+  // History sampling rate: take a snapshot only every `historyIntervalSec` of
+  // sim time (default 2 s) — typical sims advance many step()s per second of
+  // sim time, so this caps history growth and chart-redraw cost without
+  // changing any of the underlying accumulators. Always force a push when
+  // the steady criterion just latched, so the final point is captured exactly.
+  const elapsedSinceLast = state.time - state.lastHistoryTime;
+  const justLatched = state.steady && state.steadyAtTime === state.time;
+  if (elapsedSinceLast >= state.historyIntervalSec || justLatched) {
+    pushHistory(state, {
+      t: state.time,
+      eIn: eInput,
+      eStored,
+      eConv: eLossConv,
+      eRad: eLossRad,
+      Tcenter,
+      Tmax,
+      Tedge,
+      maxDeltaT,
+    });
+    state.lastHistoryTime = state.time;
+  }
 
   // (Steady-state detection happens at heater rising-edges inside the substep
   // loop above — see the cycle-tracking block.)

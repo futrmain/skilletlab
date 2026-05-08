@@ -1,4 +1,3 @@
-
 /// <reference lib="webworker" />
 // Simulation worker. Owns all SimState objects and runs the time-stepping
 // loop off the main thread, posting snapshots back at ~60 Hz so the UI can

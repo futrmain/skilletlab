@@ -222,6 +222,10 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
   const t = state?.time ?? 0;
   const cookingDone = state?.cookingReadyAtTime != null;
   const cookingTime = cookingDone ? (state?.cookingReadyAtTime ?? 0) : t;
+  const steakActive = state?.steakActive === true;
+  const steakDone = state?.steakDroppedAt != null;
+  const steakTime = steakDone ? (state?.steakDroppedAt ?? 0) : t;
+  const steakEnabled = state?.params?.steakEnabled === true;
   const steadyDone = state?.steady === true;
   const steadyTime = steadyDone ? (state?.steadyAtTime ?? 0) : t;
   return (
@@ -232,9 +236,21 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
       >
         ● Cooking ready = {cookingTime.toFixed(1)}s
       </span>
+      {steakEnabled && (
+        <span
+          className={steakActive ? "text-emerald-400" : "text-muted-foreground"}
+          title="Sim time at which the pan reached its first steady state and the steak was dropped"
+        >
+          ● Steak dropped = {steakTime.toFixed(1)}s
+        </span>
+      )}
       <span
         className={steadyDone ? "text-emerald-400" : "text-muted-foreground"}
-        title="avg(T_edge) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+        title={
+          steakActive
+            ? "Steak cooked throughout — the coldest cell reached the done temperature"
+            : "avg(T_edge) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+        }
       >
         ● Steady state = {steadyTime.toFixed(1)}s
       </span>
