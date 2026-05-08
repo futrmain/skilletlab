@@ -60,7 +60,8 @@ export interface Layer {
 }
 
 export interface SimParams {
-  panRadius: number; // m
+  panRadius: number; // m — cooking-surface radius (heater stays inside this)
+  rimHeight: number; // m — radial rim past the cooking edge (flat flange exposed to air on both sides)
   layers: Layer[];
   heaterRadius: number; // m — mean radius of the heater ring
   heaterThickness: number; // m — radial band width of the heater ring
@@ -68,9 +69,9 @@ export interface SimParams {
   setpointHigh: number; // K — heater turns OFF when center top-surface T ≥ this
   setpointLow: number; // K — heater turns ON when center top-surface T ≤ this
   ambient: number; // K
-  hConv: number; // W/m²·K convective coefficient (top face)
+  hConv: number; // W/m²·K convective coefficient (top face + rim bottom)
   initialTemp: number; // K
-  nr: number; // number of radial cells
+  nr: number; // number of radial cells (target total — split between cooking zone and rim)
   nzPerLayer: number; // axial cells per material layer (>=1)
   dt: number; // s — Crank–Nicolson time step (user-controlled, accuracy-bounded)
 }
@@ -88,12 +89,14 @@ export interface SimState {
   params: SimParams;
 
   // Mesh internals (used by step())
-  dr: number;
+  drFace: Float64Array; // length Nr — distance between centers of cell i-1 and cell i (drFace[0] unused)
   dz: Float64Array; // length Nz
   rLeft: Float64Array; // length Nr
   rRight: Float64Array; // length Nr
   ringArea: Float64Array; // π(rR²-rL²), length Nr — top/bottom face area
   heatedArea: Float64Array; // length Nr — bottom face area within heater ring
+  nInner: number; // number of cells inside the cooking zone (rRight[nInner-1] = panRadius exactly)
+  isExt: Uint8Array; // length Nr — 1 if cell i is in the rim zone (bottom face = air), 0 otherwise
   k: Float64Array; // length Nz
   rho: Float64Array; // length Nz
   cp: Float64Array; // length Nz
@@ -101,6 +104,7 @@ export interface SimState {
   H: number; // total thickness (m)
   qDensity: number; // heater W/m²
   epsTop: number; // emissivity of top surface (from topmost material layer)
+  epsBot: number; // emissivity of bottom surface (from bottommost material layer)
   // CN diagnostics (mesh+material+dt only — known at setup)
   maxFoR: number; // max α·dt/dr² across cells
   maxFoZ: number; // max α·dt/dz² across cells
@@ -120,6 +124,8 @@ export interface SimState {
   Tstar: Float64Array; // length Nr*Nz — intermediate field after half-step 1
   hTopBuf: Float64Array; // length Nr — H_top[i] = (h_conv + hRad(T_n))·ringArea[i]
   TnTopBuf: Float64Array; // length Nr — T_n at top row, snapshot for energy tally
+  hBotBuf: Float64Array; // length Nr — H_bot[i] for rim cells (0 in cooking zone)
+  TnBotBuf: Float64Array; // length Nr — T_n at bottom row, snapshot for energy tally
   // Tridiagonal scratches (sized to max(Nr, Nz))
   tdSub: Float64Array;
   tdDiag: Float64Array;
@@ -200,48 +206,87 @@ export function initSim(params: SimParams): SimState {
   }
 
   // ---- Radial mesh -----------------------------------------------------
-  const dr = panRadius / nr;
-  const r = new Float64Array(nr);
-  const rLeft = new Float64Array(nr);
-  const rRight = new Float64Array(nr);
-  const ringArea = new Float64Array(nr);
-  const heatedArea = new Float64Array(nr);
+  // Two regions: cooking zone [0, panRadius] and rim [panRadius, panRadius+rim].
+  // We split the user's `nr` target so a cell edge lands EXACTLY at panRadius.
+  const rimHeight = Math.max(0, params.rimHeight ?? 0);
+  const totalR = panRadius + rimHeight;
+  const nInner = totalR > 0 ? Math.max(1, Math.round((nr * panRadius) / totalR)) : nr;
+  let nOuter = 0;
+  const drInner = panRadius / nInner;
+  let drOuter = 0;
+  if (rimHeight > 0) {
+    nOuter = Math.max(1, Math.round(rimHeight / drInner));
+    drOuter = rimHeight / nOuter;
+  }
+  const Nr = nInner + nOuter;
+  const r = new Float64Array(Nr);
+  const rLeft = new Float64Array(Nr);
+  const rRight = new Float64Array(Nr);
+  const ringArea = new Float64Array(Nr);
+  const heatedArea = new Float64Array(Nr);
+  const isExt = new Uint8Array(Nr);
   let totalHeatedArea = 0;
-  for (let i = 0; i < nr; i++) {
-    const rl = i * dr;
-    const rr = (i + 1) * dr;
+  for (let i = 0; i < Nr; i++) {
+    let rl: number;
+    let rr: number;
+    if (i < nInner) {
+      rl = i * drInner;
+      rr = (i + 1) * drInner;
+    } else {
+      const j = i - nInner;
+      rl = panRadius + j * drOuter;
+      rr = panRadius + (j + 1) * drOuter;
+      isExt[i] = 1;
+    }
     rLeft[i] = rl;
     rRight[i] = rr;
     r[i] = (rl + rr) * 0.5;
     ringArea[i] = Math.PI * (rr * rr - rl * rl);
-    // Annular overlap: cell [rl, rr] ∩ ring [ringIn, ringOut]
-    const a = Math.max(rl, ringIn);
-    const b = Math.min(rr, ringOut);
-    heatedArea[i] = b > a ? Math.PI * (b * b - a * a) : 0;
+    // Heater overlap: heater is clamped to the cooking zone (≤ panRadius),
+    // so rim cells never receive heater flux.
+    if (i < nInner) {
+      const a = Math.max(rl, ringIn);
+      const b = Math.min(rr, ringOut);
+      heatedArea[i] = b > a ? Math.PI * (b * b - a * a) : 0;
+    } else {
+      heatedArea[i] = 0;
+    }
     totalHeatedArea += heatedArea[i];
   }
+  // Force the boundary cell edge to be exactly panRadius (avoids FP drift).
+  if (nInner > 0) rRight[nInner - 1] = panRadius;
+  if (nOuter > 0) rLeft[nInner] = panRadius;
+  // Distance between centers of cell i-1 and i (used as "dr" at the inner face of cell i).
+  const drFace = new Float64Array(Nr);
+  for (let i = 1; i < Nr; i++) {
+    drFace[i] = r[i] - r[i - 1];
+  }
+  const drMin = Math.min(drInner, nOuter > 0 ? drOuter : drInner);
 
   // ---- Field & view ----------------------------------------------------
-  const T2D = new Float64Array(nr * Nz);
+  const T2D = new Float64Array(Nr * Nz);
   T2D.fill(initialTemp);
-  const T = T2D.subarray((Nz - 1) * nr, Nz * nr); // top surface — live view
+  const T = T2D.subarray((Nz - 1) * Nr, Nz * Nr); // top surface — live view
 
   const qDensity = totalHeatedArea > 0 ? heaterPower / totalHeatedArea : 0;
-  // Top-surface emissivity from the topmost material layer
+  // Top + bottom surface emissivities from outermost material layers.
   const topLayer = layers[layers.length - 1];
+  const botLayer = layers[0];
   const epsTop = lookupEmissivity(topLayer);
+  const epsBot = lookupEmissivity(botLayer);
 
   // CN is unconditionally stable — dt is the user-supplied accuracy step.
   const dt = Math.max(1e-6, params.dt);
-  const tdMax = Math.max(nr, Nz);
+  const tdMax = Math.max(Nr, Nz);
 
   // Per-cell Fourier numbers. Pure diffusion has no advective CFL; Fo gates
-  // CN accuracy and ringing tendency, not stability.
+  // CN accuracy and ringing tendency, not stability. Use min Δr (across the
+  // cooking-zone and rim cell sizes) so the diagnostic stays meaningful.
   let maxFoR = 0;
   let maxFoZ = 0;
   for (let j = 0; j < Nz; j++) {
     const alpha = k[j] / (rho[j] * cp[j]);
-    const FoR = (alpha * dt) / (dr * dr);
+    const FoR = (alpha * dt) / (drMin * drMin);
     const FoZ = (alpha * dt) / (dz[j] * dz[j]);
     if (FoR > maxFoR) maxFoR = FoR;
     if (FoZ > maxFoZ) maxFoZ = FoZ;
@@ -252,17 +297,19 @@ export function initSim(params: SimParams): SimState {
     r,
     T2D,
     z,
-    Nr: nr,
+    Nr,
     Nz,
     time: 0,
     dt,
     params,
-    dr,
+    drFace,
     dz,
     rLeft,
     rRight,
     ringArea,
     heatedArea,
+    nInner,
+    isExt,
     k,
     rho,
     cp,
@@ -270,6 +317,7 @@ export function initSim(params: SimParams): SimState {
     H,
     qDensity,
     epsTop,
+    epsBot,
     maxFoR,
     maxFoZ,
     steady: false,
@@ -279,9 +327,11 @@ export function initSim(params: SimParams): SimState {
     lastCycleAvgTmin: null,
     prevCycleAvgTmin: null,
     cookingReadyAtTime: null,
-    Tstar: new Float64Array(nr * Nz),
-    hTopBuf: new Float64Array(nr),
-    TnTopBuf: new Float64Array(nr),
+    Tstar: new Float64Array(Nr * Nz),
+    hTopBuf: new Float64Array(Nr),
+    TnTopBuf: new Float64Array(Nr),
+    hBotBuf: new Float64Array(Nr),
+    TnBotBuf: new Float64Array(Nr),
     tdSub: new Float64Array(tdMax),
     tdDiag: new Float64Array(tdMax),
     tdSup: new Float64Array(tdMax),
@@ -323,21 +373,26 @@ export function step(state: SimState, substeps = 1) {
     params,
     Nr,
     Nz,
-    dr,
+    drFace,
     dz,
     rLeft,
     rRight,
     ringArea,
     heatedArea,
+    nInner,
+    isExt,
     k,
     rho,
     cp,
     axialFaceR,
     qDensity,
     epsTop,
+    epsBot,
     Tstar,
     hTopBuf,
     TnTopBuf,
+    hBotBuf,
+    TnBotBuf,
     tdSub,
     tdDiag,
     tdSup,
@@ -375,13 +430,8 @@ export function step(state: SimState, substeps = 1) {
         const avgTmin = state.cycleTminIntegral / cycleDuration;
         state.prevCycleAvgTmin = state.lastCycleAvgTmin;
         state.lastCycleAvgTmin = avgTmin;
-        if (
-          !state.steady &&
-          state.prevCycleAvgTmin !== null &&
-          state.prevCycleAvgTmin > 0
-        ) {
-          const relChange =
-            Math.abs(avgTmin - state.prevCycleAvgTmin) / state.prevCycleAvgTmin;
+        if (!state.steady && state.prevCycleAvgTmin !== null && state.prevCycleAvgTmin > 0) {
+          const relChange = Math.abs(avgTmin - state.prevCycleAvgTmin) / state.prevCycleAvgTmin;
           if (relChange <= 0.02) {
             state.steady = true;
             state.steadyAtTime = state.time;
@@ -399,6 +449,18 @@ export function step(state: SimState, substeps = 1) {
       hTopBuf[i] = (hConv + hRad) * ringArea[i]; // W/K
       TnTopBuf[i] = Tn;
     }
+    // Same treatment for the bottom face of rim cells (j=0). H = 0 for
+    // cooking-zone cells where the bottom is heater + adiabatic.
+    for (let i = 0; i < Nr; i++) {
+      const Tn = T2D[i]; // j=0 row
+      TnBotBuf[i] = Tn;
+      if (isExt[i]) {
+        const hRad = epsBot * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
+        hBotBuf[i] = (hConv + hRad) * ringArea[i];
+      } else {
+        hBotBuf[i] = 0;
+      }
+    }
 
     // ---- Half-step 1: implicit in r, explicit in z (one tridiag per row j) ----
     for (let j = 0; j < Nz; j++) {
@@ -415,8 +477,8 @@ export function step(state: SimState, substeps = 1) {
         const idx = rowOff + i;
         const A = ringArea[i];
         const rhocV_dt2 = (rcDzj * A) / halfDt;
-        const Gin = i > 0 ? (kj * TWO_PI * rLeft[i] * dzj) / dr : 0;
-        const Gout = i < Nr - 1 ? (kj * TWO_PI * rRight[i] * dzj) / dr : 0;
+        const Gin = i > 0 ? (kj * TWO_PI * rLeft[i] * dzj) / drFace[i] : 0;
+        const Gout = i < Nr - 1 ? (kj * TWO_PI * rRight[i] * dzj) / drFace[i + 1] : 0;
 
         tdSub[i] = -Gin;
         tdSup[i] = -Gout;
@@ -437,8 +499,16 @@ export function step(state: SimState, substeps = 1) {
           rhs -= hTopBuf[i] * T2D[idx];
           rhs += hTopBuf[i] * Tamb;
         }
-        if (isBot && heaterOn && heatedArea[i] > 0) {
-          rhs += qDensity * heatedArea[i];
+        if (isBot) {
+          if (heaterOn && heatedArea[i] > 0) {
+            rhs += qDensity * heatedArea[i];
+          }
+          // Bottom-face air loss in the rim zone (cooking-zone bottom is
+          // either heater or adiabatic, hBotBuf is 0 there).
+          if (hBotBuf[i] > 0) {
+            rhs -= hBotBuf[i] * T2D[idx];
+            rhs += hBotBuf[i] * Tamb;
+          }
         }
         tdRhs[i] = rhs;
       }
@@ -466,20 +536,25 @@ export function step(state: SimState, substeps = 1) {
         tdSup[j] = -Gtop;
         let diag = rhocV_dt2 + Gbot + Gtop;
         if (isTop) diag += hTopBuf[i];
+        // Bottom Robin (rim cells only): on the diagonal in the implicit-z half.
+        if (isBot && hBotBuf[i] > 0) diag += hBotBuf[i];
         tdDiag[j] = diag;
 
         // RHS = ρcV/(dt/2)·T* + (L_r T*) + S
         let rhs = rhocV_dt2 * Tstar[idx];
         if (i > 0) {
-          const Gin = (kj * TWO_PI * rLeft[i] * dzj) / dr;
+          const Gin = (kj * TWO_PI * rLeft[i] * dzj) / drFace[i];
           rhs += Gin * (Tstar[idx - 1] - Tstar[idx]);
         }
         if (i < Nr - 1) {
-          const Gout = (kj * TWO_PI * rRight[i] * dzj) / dr;
+          const Gout = (kj * TWO_PI * rRight[i] * dzj) / drFace[i + 1];
           rhs += Gout * (Tstar[idx + 1] - Tstar[idx]);
         }
         if (isTop) rhs += hTopBuf[i] * Tamb;
-        if (isBot && heaterOn && heatedArea[i] > 0) rhs += qDensity * heatedArea[i];
+        if (isBot) {
+          if (heaterOn && heatedArea[i] > 0) rhs += qDensity * heatedArea[i];
+          if (hBotBuf[i] > 0) rhs += hBotBuf[i] * Tamb;
+        }
 
         tdRhs[j] = rhs;
       }
@@ -494,16 +569,24 @@ export function step(state: SimState, substeps = 1) {
       }
     }
 
-    // ---- Energy tally (trapezoidal on top surface, exact for the applied flux) ----
-    // PR-ADI applies top-loss flux as ½(loss(T_n) + loss(T_{n+1})) over the step,
-    // with hRad frozen at T_n inside hTopBuf[i] = (h_conv + hRad)·A.
+    // ---- Energy tally (trapezoidal — exact for the applied flux) ----
+    // Top face loss for every disc cell.
     for (let i = 0; i < Nr; i++) {
       const Tn = TnTopBuf[i];
       const Tnp1 = T2D[topRowOff + i];
-      const Tavg = 0.5 * (Tn + Tnp1);
-      const dTavg = Tavg - Tamb;
+      const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
       const A = ringArea[i];
-      const hRad = (hTopBuf[i] - hConv * A) / A; // recover hRad from H_top = (h_conv+hRad)·A
+      const hRad = (hTopBuf[i] - hConv * A) / A;
+      eLossConv += hConv * dTavg * A * dt;
+      eLossRad += hRad * dTavg * A * dt;
+    }
+    // Bottom face loss for rim cells only.
+    for (let i = nInner; i < Nr; i++) {
+      const Tn = TnBotBuf[i];
+      const Tnp1 = T2D[i]; // j=0 row
+      const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
+      const A = ringArea[i];
+      const hRad = (hBotBuf[i] - hConv * A) / A;
       eLossConv += hConv * dTavg * A * dt;
       eLossRad += hRad * dTavg * A * dt;
     }
@@ -511,10 +594,11 @@ export function step(state: SimState, substeps = 1) {
     state.time += dt;
     eInput += heaterFactor * heaterPower * dt;
 
-    // Sample T_min from the new top row and accumulate into the current cycle's
-    // integral. Keeps the cycle average accurate at substep granularity.
+    // Sample T_min from the new top row over the COOKING ZONE only (the
+    // rim is colder by design so including it would mask cooking-surface
+    // dynamics) and accumulate into the current cycle's integral.
     let TminSub = Infinity;
-    for (let i = 0; i < Nr; i++) {
+    for (let i = 0; i < nInner; i++) {
       const Ti = T2D[topRowOff + i];
       if (Ti < TminSub) TminSub = Ti;
     }
@@ -539,18 +623,20 @@ export function step(state: SimState, substeps = 1) {
     eStored += rcDz * rowSum;
   }
 
-  // Top-surface temperature stats at the new time
+  // Top-surface temperature stats at the new time. T_min and T_max scan only
+  // the cooking zone (i < nInner); the rim flange is much colder by
+  // construction and would otherwise dominate T_min / T_max−T_min.
   let Tmax = -Infinity;
   let Tmin = Infinity;
-  for (let i = 0; i < Nr; i++) {
+  for (let i = 0; i < nInner; i++) {
     const Ti = T2D[topRowOff + i];
     if (Ti > Tmax) Tmax = Ti;
     if (Ti < Tmin) Tmin = Ti;
   }
   const Tcenter = T2D[topRowOff];
 
-  // Latch "cooking ready" — first time every top-surface cell exceeds the
-  // searing threshold (T_min ≥ 200°C). Once set, never cleared until reset.
+  // Latch "cooking ready" — first time the cooking surface min reaches the
+  // searing threshold (T_min ≥ 200°C). Latched once.
   if (state.cookingReadyAtTime === null && Tmin >= SEARING_TEMP_K) {
     state.cookingReadyAtTime = state.time;
   }

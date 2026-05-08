@@ -4,7 +4,8 @@ import { MATERIALS, type Layer } from "./simulation";
 export interface PanConfig {
   id: string;
   name: string;
-  diameter: number; // m
+  diameter: number; // m — cooking-surface diameter (heater stays inside this)
+  rimHeight: number; // m — radial flange past the cooking surface (the pan's rim)
   layers: Layer[];
 }
 
@@ -29,24 +30,28 @@ export const PAN_TEMPLATES: PanConfig[] = [
     id: "tpl-tri-ply",
     name: "Tri-Ply Stainless 28cm",
     diameter: 0.28,
+    rimHeight: 0.08,
     layers: [L("Stainless 304", 0.0005), L("Aluminum", 0.004), L("Stainless 304", 0.0005)],
   },
   {
     id: "tpl-cast-iron",
     name: "Cast Iron Skillet 28cm",
     diameter: 0.28,
+    rimHeight: 0.08,
     layers: [L("Cast Iron", 0.005)],
   },
   {
     id: "tpl-carbon-steel",
     name: "Carbon Steel 28cm",
     diameter: 0.28,
+    rimHeight: 0.08,
     layers: [L("Carbon Steel", 0.0025)],
   },
   {
     id: "tpl-copper-core",
     name: "Copper Core 28cm",
     diameter: 0.28,
+    rimHeight: 0.08,
     layers: [
       L("Stainless 304", 0.0005),
       L("Copper", 0.002),
@@ -58,6 +63,7 @@ export const PAN_TEMPLATES: PanConfig[] = [
     id: "tpl-aluminum",
     name: "Aluminum Nonstick 28cm",
     diameter: 0.28,
+    rimHeight: 0.08,
     layers: [L("Aluminum", 0.0035)],
   },
 ];
@@ -110,7 +116,7 @@ export const HEATER_TEMPLATES: HeaterConfig[] = [
   },
 ];
 
-const PAN_KEY = "skillet.pans.v2";
+const PAN_KEY = "skillet.pans.v4";
 const HEATER_KEY = "skillet.heaters.v4";
 
 function load<T>(key: string, fallback: T[]): T[] {

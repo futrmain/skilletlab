@@ -76,6 +76,7 @@ function Index() {
         {
           key: s.key,
           panRadius: pan.diameter / 2,
+          rimHeight: pan.rimHeight,
           layers: pan.layers,
           heaterRadius: Math.min(heater.diameter / 2, pan.diameter / 2),
           heaterThickness: heater.thickness,
@@ -299,17 +300,13 @@ function Index() {
               <section className="panel p-5 space-y-3">
                 <div className="label-tag">Cooking ready vs Steady state</div>
                 <p className="text-xs text-muted-foreground">
-                  One point per simulation, plotted once both milestones latch. Closer to the
-                  dashed <span className="font-mono">y = x</span> line means the cooking surface
-                  stabilises shortly after first being hot enough.
+                  One point per simulation, plotted once both milestones latch. Closer to the dashed{" "}
+                  <span className="font-mono">y = x</span> line means the cooking surface stabilises
+                  shortly after first being hot enough.
                 </p>
                 <CompareLegend entries={compareEntries} />
                 <div className="overflow-x-auto">
-                  <CompareReadyVsSteadyScatter
-                    entries={compareEntries}
-                    width={460}
-                    height={320}
-                  />
+                  <CompareReadyVsSteadyScatter entries={compareEntries} width={460} height={320} />
                 </div>
               </section>
 
@@ -321,11 +318,7 @@ function Index() {
                 </p>
                 <CompareLegend entries={compareEntries} />
                 <div className="overflow-x-auto">
-                  <CompareSpreadVsReadyScatter
-                    entries={compareEntries}
-                    width={460}
-                    height={320}
-                  />
+                  <CompareSpreadVsReadyScatter entries={compareEntries} width={460} height={320} />
                 </div>
               </section>
             </div>
@@ -431,14 +424,14 @@ function Index() {
               cut-off/re-ignite events. Changes restart the simulation.
             </p>
             <p className="text-xs text-muted-foreground">
-              Steady-state criterion: track the average{" "}
-              <span className="font-mono">T_min</span> over each heater on/off cycle (rising edge
-              → rising edge). Once two complete cycles are in hand, compare avg(T_min) of the
-              just-completed cycle to the cycle before it. If the relative change is{" "}
+              Steady-state criterion: track the average <span className="font-mono">T_min</span>{" "}
+              over each heater on/off cycle (rising edge → rising edge). Once two complete cycles
+              are in hand, compare avg(T_min) of the just-completed cycle to the cycle before it. If
+              the relative change is{" "}
               <span className="font-mono">|Δavg(T_min)| / avg(T_min)_prev ≤ 2%</span>, the limit
-              cycle has stabilised. Each simulation freezes when its criterion fires; the run
-              loop stops when all simulations are steady. Requires the heater to actually cycle —
-              if losses keep the pan below the cut-off temperature, no cycles complete and the
+              cycle has stabilised. Each simulation freezes when its criterion fires; the run loop
+              stops when all simulations are steady. Requires the heater to actually cycle — if
+              losses keep the pan below the cut-off temperature, no cycles complete and the
               simulation never declares steady.
             </p>
           </section>

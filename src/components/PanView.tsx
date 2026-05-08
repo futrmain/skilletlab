@@ -4,7 +4,8 @@ import { thermalColorRGBA } from "@/lib/colormap";
 interface Props {
   T: Float64Array;
   r: Float64Array;
-  panRadius: number;
+  panRadius: number; // total physical radius (cooking + rim)
+  cookingRadius?: number; // cooking-edge radius (drawn as dashed inner ring)
   heaterRadius: number; // mean radius of the heater ring
   heaterThickness: number; // radial band width of the heater ring
   tMin: number;
@@ -19,6 +20,7 @@ export function PanView({
   T,
   r,
   panRadius,
+  cookingRadius,
   heaterRadius,
   heaterThickness,
   tMin,
@@ -41,6 +43,7 @@ export function PanView({
     const radiusPx = Math.min(w, h) / 2 - 8;
     const range = Math.max(1e-6, tMax - tMin);
 
+    const N = T.length;
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const dx = x - cx;
@@ -55,12 +58,29 @@ export function PanView({
           continue;
         }
         const rPhys = (d / radiusPx) * panRadius;
-        // interp T at rPhys
-        const dr = r[1] - r[0];
-        const fi = rPhys / dr;
-        const i0 = Math.floor(fi);
-        const i1 = Math.min(T.length - 1, i0 + 1);
-        const f = fi - i0;
+        // Binary search for the bracketing cell-center pair (works for the
+        // non-uniform mesh introduced by the cooking-zone / rim split).
+        let i0 = 0;
+        let i1 = N - 1;
+        if (rPhys <= r[0]) {
+          i0 = 0;
+          i1 = 0;
+        } else if (rPhys >= r[N - 1]) {
+          i0 = N - 1;
+          i1 = N - 1;
+        } else {
+          let lo = 0;
+          let hi = N - 1;
+          while (lo < hi - 1) {
+            const mid = (lo + hi) >>> 1;
+            if (r[mid] <= rPhys) lo = mid;
+            else hi = mid;
+          }
+          i0 = lo;
+          i1 = hi;
+        }
+        const span = r[i1] - r[i0];
+        const f = span > 0 ? (rPhys - r[i0]) / span : 0;
         const Tv = T[i0] * (1 - f) + T[i1] * f;
         const norm = (Tv - tMin) / range;
         thermalColorRGBA(norm, img.data, off);
@@ -86,13 +106,25 @@ export function PanView({
     }
     ctx.setLineDash([]);
 
-    // pan rim
+    // Cooking-edge marker (dashed) — boundary between cooking zone and the
+    // air-cooled rim flange.
+    if (cookingRadius && cookingRadius > 0 && cookingRadius < panRadius) {
+      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.setLineDash([6, 4]);
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      ctx.arc(cx, cy, (cookingRadius / panRadius) * radiusPx, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // pan outer edge (outer edge of rim)
     ctx.strokeStyle = "rgba(255,255,255,0.6)";
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.arc(cx, cy, radiusPx, 0, Math.PI * 2);
     ctx.stroke();
-  }, [T, r, panRadius, heaterRadius, heaterThickness, tMin, tMax, tick]);
+  }, [T, r, panRadius, cookingRadius, heaterRadius, heaterThickness, tMin, tMax, tick]);
 
   return (
     <canvas

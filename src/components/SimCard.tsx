@@ -132,7 +132,8 @@ export function SimCard({
         <PanView
           T={Tarr}
           r={Rarr}
-          panRadius={pan.diameter / 2}
+          panRadius={pan.diameter / 2 + pan.rimHeight}
+          cookingRadius={pan.diameter / 2}
           heaterRadius={Math.min(heater.diameter / 2, pan.diameter / 2)}
           heaterThickness={heater.thickness}
           tMin={tMinK}

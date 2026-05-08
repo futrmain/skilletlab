@@ -4,6 +4,7 @@ import { initSim, step, type SimState, type Layer } from "./simulation";
 export interface SimInput {
   key: string;
   panRadius: number;
+  rimHeight: number;
   layers: Layer[];
   heaterRadius: number; // mean radius of the heater ring
   heaterThickness: number; // radial band width of the heater ring
@@ -39,6 +40,7 @@ export function useSimulations(
         inp.key,
         initSim({
           panRadius: inp.panRadius,
+          rimHeight: inp.rimHeight,
           layers: inp.layers,
           heaterRadius: inp.heaterRadius,
           heaterThickness: inp.heaterThickness,

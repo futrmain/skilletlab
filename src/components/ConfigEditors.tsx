@@ -66,6 +66,7 @@ export function PanEditor({
         id: uid(),
         name: "New pan",
         diameter: 0.28,
+        rimHeight: 0.08,
         layers: [{ name: "Aluminum", thickness: 0.003, ...MATERIALS.Aluminum }],
       },
     ]);
@@ -182,6 +183,14 @@ export function PanEditor({
                 min={5}
                 max={50}
                 onChange={(v) => updatePan(p.id, { diameter: v / 100 })}
+              />
+              <Field
+                label="Rim height (cm)"
+                value={p.rimHeight * 100}
+                step={0.5}
+                min={0}
+                max={20}
+                onChange={(v) => updatePan(p.id, { rimHeight: v / 100 })}
               />
               <div className="text-xs text-muted-foreground">
                 Total thickness:{" "}
