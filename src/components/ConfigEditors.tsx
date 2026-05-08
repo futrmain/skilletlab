@@ -260,6 +260,8 @@ export function HeaterEditor({
         diameter: 0.16,
         thickness: 0.02,
         power: 1800,
+        setpointHigh: 300,
+        setpointLow: 280,
       },
     ]);
   const addFromTemplate = (tplId: string) => {
@@ -340,6 +342,22 @@ export function HeaterEditor({
               min={100}
               max={6000}
               onChange={(v) => update(h.id, { power: v })}
+            />
+            <Field
+              label="Cut-off temp (°C)"
+              value={h.setpointHigh}
+              step={5}
+              min={0}
+              max={600}
+              onChange={(v) => update(h.id, { setpointHigh: v })}
+            />
+            <Field
+              label="Re-ignite temp (°C)"
+              value={h.setpointLow}
+              step={5}
+              min={0}
+              max={600}
+              onChange={(v) => update(h.id, { setpointLow: v })}
             />
             <div className="text-xs text-muted-foreground">
               Flux:{" "}

@@ -14,6 +14,8 @@ export interface HeaterConfig {
   diameter: number; // m — mean diameter of the heater ring
   thickness: number; // m — radial band width of the heater ring
   power: number; // W
+  setpointHigh: number; // °C — heater turns off when center top-surface T ≥ this
+  setpointLow: number; // °C — heater turns on when center top-surface T ≤ this
 }
 
 const L = (name: string, thickness: number): Layer => ({
@@ -61,13 +63,23 @@ export const PAN_TEMPLATES: PanConfig[] = [
 ];
 
 export const HEATER_TEMPLATES: HeaterConfig[] = [
-  { id: "tpl-gas-small", name: "Gas burner — small", diameter: 0.08, thickness: 0.02, power: 1500 },
+  {
+    id: "tpl-gas-small",
+    name: "Gas burner — small",
+    diameter: 0.08,
+    thickness: 0.02,
+    power: 1500,
+    setpointHigh: 300,
+    setpointLow: 280,
+  },
   {
     id: "tpl-gas-medium",
     name: "Gas burner — medium",
     diameter: 0.12,
     thickness: 0.025,
     power: 2500,
+    setpointHigh: 300,
+    setpointLow: 280,
   },
   {
     id: "tpl-gas-large",
@@ -75,19 +87,31 @@ export const HEATER_TEMPLATES: HeaterConfig[] = [
     diameter: 0.16,
     thickness: 0.03,
     power: 4000,
+    setpointHigh: 300,
+    setpointLow: 280,
   },
-  { id: "tpl-induction", name: "Induction hob 21cm", diameter: 0.18, thickness: 0.02, power: 2200 },
+  {
+    id: "tpl-induction",
+    name: "Induction hob 21cm",
+    diameter: 0.18,
+    thickness: 0.02,
+    power: 2200,
+    setpointHigh: 300,
+    setpointLow: 280,
+  },
   {
     id: "tpl-electric-coil",
     name: "Electric coil 18cm",
     diameter: 0.16,
     thickness: 0.012,
     power: 1800,
+    setpointHigh: 300,
+    setpointLow: 280,
   },
 ];
 
 const PAN_KEY = "skillet.pans.v1";
-const HEATER_KEY = "skillet.heaters.v2";
+const HEATER_KEY = "skillet.heaters.v3";
 
 function load<T>(key: string, fallback: T[]): T[] {
   if (typeof window === "undefined") return fallback;

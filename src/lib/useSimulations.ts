@@ -8,6 +8,8 @@ export interface SimInput {
   heaterRadius: number; // mean radius of the heater ring
   heaterThickness: number; // radial band width of the heater ring
   heaterPower: number;
+  setpointHigh: number; // K — heater off above this center top-surface temp
+  setpointLow: number; // K — heater on below this center top-surface temp
   ambient: number; // K
   hConv: number;
   initialTemp: number; // K
@@ -40,6 +42,8 @@ export function useSimulations(
           heaterRadius: inp.heaterRadius,
           heaterThickness: inp.heaterThickness,
           heaterPower: inp.heaterPower,
+          setpointHigh: inp.setpointHigh,
+          setpointLow: inp.setpointLow,
           ambient: inp.ambient,
           hConv: inp.hConv,
           nr: inp.nr,

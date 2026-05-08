@@ -49,6 +49,8 @@ export interface SimParams {
   heaterRadius: number; // m — mean radius of the heater ring
   heaterThickness: number; // m — radial band width of the heater ring
   heaterPower: number; // W
+  setpointHigh: number; // K — heater turns OFF when center top-surface T ≥ this
+  setpointLow: number; // K — heater turns ON when center top-surface T ≤ this
   ambient: number; // K
   hConv: number; // W/m²·K convective coefficient (top face)
   initialTemp: number; // K
@@ -83,6 +85,7 @@ export interface SimState {
   qDensity: number; // heater W/m²
   epsTop: number; // emissivity of top surface (from topmost material layer)
   scratchTnew: Float64Array; // reused buffer for explicit update
+  heaterOn: boolean; // hysteresis state — flipped per substep based on T_center_top
 
   // Energy diagnostics
   eInput: number; // J — cumulative heater input
@@ -213,6 +216,7 @@ export function initSim(params: SimParams): SimState {
     qDensity,
     epsTop,
     scratchTnew: new Float64Array(nr * Nz),
+    heaterOn: true,
 
     eInput: 0,
     eLossConv: 0,
@@ -253,13 +257,25 @@ export function step(state: SimState, substeps = 1) {
   const Tamb = params.ambient;
   const hConv = params.hConv;
   const heaterPower = params.heaterPower;
+  // Normalize setpoints in case the user inverted them (low > high) so
+  // hysteresis still works rather than getting stuck.
+  const setHigh = Math.max(params.setpointHigh, params.setpointLow);
+  const setLow = Math.min(params.setpointHigh, params.setpointLow);
   const TWO_PI = 2 * Math.PI;
+  const topRowOff = (Nz - 1) * Nr;
 
   let eInput = state.eInput;
   let eLossConv = state.eLossConv;
   let eLossRad = state.eLossRad;
+  let heaterOn = state.heaterOn;
 
   for (let s = 0; s < substeps; s++) {
+    // Hysteresis on center-of-top-surface temperature
+    const Tcenter = T2D[topRowOff];
+    if (heaterOn && Tcenter >= setHigh) heaterOn = false;
+    else if (!heaterOn && Tcenter <= setLow) heaterOn = true;
+    const heaterFactor = heaterOn ? 1 : 0;
+
     for (let j = 0; j < Nz; j++) {
       const kj = k[j];
       const dzj = dz[j];
@@ -289,8 +305,9 @@ export function step(state: SimState, substeps = 1) {
         if (j > 0) {
           Q += (ringArea[i] / RbotR) * (T2D[idx - Nr] - Tij);
         } else {
-          // Pan bottom: heater on the annular ring; adiabatic elsewhere
-          if (heatedArea[i] > 0) {
+          // Pan bottom: heater on the annular ring (gated by hysteresis);
+          // adiabatic elsewhere.
+          if (heaterOn && heatedArea[i] > 0) {
             Q += qDensity * heatedArea[i];
           }
         }
@@ -314,12 +331,13 @@ export function step(state: SimState, substeps = 1) {
     }
     T2D.set(Tnew);
     state.time += dt;
-    eInput += heaterPower * dt;
+    eInput += heaterFactor * heaterPower * dt;
   }
 
   state.eInput = eInput;
   state.eLossConv = eLossConv;
   state.eLossRad = eLossRad;
+  state.heaterOn = heaterOn;
 
   // E_stored = Σ_ij ρcV_ij · (T_ij - T_initial) at the new time
   let eStored = 0;
