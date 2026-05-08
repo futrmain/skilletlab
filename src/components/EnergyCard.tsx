@@ -166,9 +166,28 @@ function EnergyChart({
       return;
     }
 
-    const tMax = Math.max(1e-3, hist[hist.length - 1].t);
+    // Power = dE/dt via discrete differences between consecutive samples.
+    // (Re-using HistorySample shape; eIn/eStored/eConv/eRad now hold W not J.)
+    const power: typeof hist = [];
+    for (let i = 1; i < hist.length; i++) {
+      const dtSample = hist[i].t - hist[i - 1].t;
+      if (dtSample <= 0) continue;
+      power.push({
+        t: hist[i].t,
+        eIn: (hist[i].eIn - hist[i - 1].eIn) / dtSample,
+        eStored: (hist[i].eStored - hist[i - 1].eStored) / dtSample,
+        eConv: (hist[i].eConv - hist[i - 1].eConv) / dtSample,
+        eRad: (hist[i].eRad - hist[i - 1].eRad) / dtSample,
+      });
+    }
+    if (power.length < 2) {
+      drawAxes(ctx, pad, w, h, "0", "0", "0 s", "0 s");
+      return;
+    }
+
+    const tMax = Math.max(1e-3, power[power.length - 1].t);
     let yMax = 1e-9;
-    for (const s of hist) {
+    for (const s of power) {
       if (s.eIn > yMax) yMax = s.eIn;
       if (s.eStored > yMax) yMax = s.eStored;
       if (s.eConv > yMax) yMax = s.eConv;
@@ -176,15 +195,15 @@ function EnergyChart({
     }
     if (yMax < 1) yMax = 1;
 
-    drawAxes(ctx, pad, w, h, `${(yMax / 1000).toFixed(1)} kJ`, "0", `${tMax.toFixed(1)} s`, "0 s");
+    drawAxes(ctx, pad, w, h, `${(yMax / 1000).toFixed(2)} kW`, "0", `${tMax.toFixed(1)} s`, "0 s");
 
     const xOf = (t: number) => pad.l + (t / tMax) * w;
     const yOf = (e: number) => pad.t + h * (1 - e / yMax);
 
-    drawLine(ctx, hist, xOf, yOf, (s) => s.eIn, COL.input);
-    drawLine(ctx, hist, xOf, yOf, (s) => s.eStored, COL.stored);
-    drawLine(ctx, hist, xOf, yOf, (s) => s.eConv, COL.conv);
-    drawLine(ctx, hist, xOf, yOf, (s) => s.eRad, COL.rad);
+    drawLine(ctx, power, xOf, yOf, (s) => s.eIn, COL.input);
+    drawLine(ctx, power, xOf, yOf, (s) => s.eStored, COL.stored);
+    drawLine(ctx, power, xOf, yOf, (s) => s.eConv, COL.conv);
+    drawLine(ctx, power, xOf, yOf, (s) => s.eRad, COL.rad);
   }, [state, width, height]);
 
   return <canvas ref={ref} />;
