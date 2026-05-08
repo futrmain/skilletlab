@@ -151,6 +151,7 @@ export function SimCard({
             r={Rarr}
             tMin={tMinK}
             tMax={tMaxK}
+            rOuter={pan.diameter / 2 + pan.rimHeight}
             tick={state?.time}
             width={300}
             height={140}

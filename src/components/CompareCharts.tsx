@@ -47,19 +47,22 @@ export function CompareProfileChart({ entries, width = 720, height = 320 }: PPro
     const w = width - pad.l - pad.r;
     const h = height - pad.t - pad.b;
 
-    // domain
+    // domain — use the actual physical extent (panRadius + rimHeight) rather
+    // than the last cell-center, so the axis matches the pan dimensions.
     let rMax = 0.001;
     let tMin = Infinity,
       tMax = -Infinity;
     for (const e of entries) {
       const T = e.state?.T;
       const R = e.state?.r;
+      const params = e.state?.params;
       if (!T || !R) {
         tMin = Math.min(tMin, e.initialTempK);
         tMax = Math.max(tMax, e.initialTempK + 50);
         continue;
       }
-      rMax = Math.max(rMax, R[R.length - 1]);
+      const physOuter = params ? params.panRadius + params.rimHeight : R[R.length - 1];
+      rMax = Math.max(rMax, physOuter);
       for (let i = 0; i < T.length; i++) {
         if (T[i] < tMin) tMin = T[i];
         if (T[i] > tMax) tMax = T[i];

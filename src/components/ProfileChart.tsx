@@ -7,12 +7,25 @@ interface Props {
   tMax: number;
   width?: number;
   height?: number;
+  // Total physical radius (m). Used as the x-axis upper bound. Without this
+  // the chart falls back to r[N-1] which is the last cell-center, leaving a
+  // half-cell gap to the actual outer edge of the pan.
+  rOuter?: number;
   // Per-tick signal (e.g. state.time) so the canvas redraws even when the
   // T/r typed-array references stay stable (their contents mutate in place).
   tick?: number;
 }
 
-export function ProfileChart({ T, r, tMin, tMax, width = 380, height = 180, tick }: Props) {
+export function ProfileChart({
+  T,
+  r,
+  tMin,
+  tMax,
+  width = 380,
+  height = 180,
+  rOuter,
+  tick,
+}: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = ref.current;
@@ -43,7 +56,7 @@ export function ProfileChart({ T, r, tMin, tMax, width = 380, height = 180, tick
       const y = pad.t + (h * i) / 4;
       ctx.fillText(`${(v - 273.15).toFixed(0)}°`, 4, y + 3);
     }
-    const rMax = r[r.length - 1];
+    const rMax = rOuter && rOuter > 0 ? rOuter : r[r.length - 1];
     ctx.fillText("0", pad.l - 2, height - 6);
     ctx.fillText(`${(rMax * 100).toFixed(1)} cm`, pad.l + w - 36, height - 6);
 
@@ -59,7 +72,7 @@ export function ProfileChart({ T, r, tMin, tMax, width = 380, height = 180, tick
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
-  }, [T, r, tMin, tMax, width, height, tick]);
+  }, [T, r, tMin, tMax, width, height, rOuter, tick]);
 
   return <canvas ref={ref} width={width} height={height} style={{ width, height }} />;
 }
