@@ -165,49 +165,83 @@ export function SimCard({
         <ProgressIndicators state={state} />
       </div>
 
-      <div className="flex justify-center">
-        <PanView
-          T={Tarr}
-          r={Rarr}
-          panRadius={pan.diameter / 2 + pan.rimHeight}
-          cookingRadius={pan.diameter / 2}
-          heaterRadius={Math.min(heater.diameter / 2, pan.diameter / 2)}
-          heaterThickness={heater.thickness}
-          tMin={tMinK}
-          tMax={tMaxK}
-          tick={state?.time}
-          size={300}
-        />
-      </div>
-
-      <div className="flex flex-wrap gap-3 justify-center">
-        <div className="space-y-1">
-          <div className="label-tag">Radial profile</div>
-          <ProfileChart
-            T={Tarr}
-            r={Rarr}
-            tMin={tMinK}
-            tMax={tMaxK}
-            rOuter={pan.diameter / 2 + pan.rimHeight}
-            tick={state?.time}
-            width={300}
-            height={140}
-          />
-        </div>
-        <div className="space-y-1">
-          <div className="flex items-center justify-between">
-            <div className="label-tag">Top surface vs time</div>
-            <TempHistoryLegend />
+      {/* 2×2 grid below the text labels.
+          TL: surface temperature (PanView)        TR: history 0 → t_steady
+          BL: radial profile                       BR: history t_steady → end */}
+      {(() => {
+        const tSplit = state?.steakDroppedAt ?? state?.steadyAtTime ?? null;
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <div className="space-y-1 flex flex-col items-center">
+              <div className="label-tag self-start">Surface temperature</div>
+              <PanView
+                T={Tarr}
+                r={Rarr}
+                panRadius={pan.diameter / 2 + pan.rimHeight}
+                cookingRadius={pan.diameter / 2}
+                heaterRadius={Math.min(heater.diameter / 2, pan.diameter / 2)}
+                heaterThickness={heater.thickness}
+                tMin={tMinK}
+                tMax={tMaxK}
+                tick={state?.time}
+                size={220}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="label-tag">Pan heat-up (0 → t_steady)</div>
+                <TempHistoryLegend />
+              </div>
+              <TempHistoryChart
+                state={state}
+                initialTempK={initialTempK}
+                yRangeCOverride={historyRangeCOverride}
+                tStart={0}
+                tEnd={tSplit ?? undefined}
+                width={260}
+                height={180}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="label-tag">Radial profile</div>
+              <ProfileChart
+                T={Tarr}
+                r={Rarr}
+                tMin={tMinK}
+                tMax={tMaxK}
+                rOuter={pan.diameter / 2 + pan.rimHeight}
+                tick={state?.time}
+                width={260}
+                height={180}
+              />
+            </div>
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="label-tag">Cooking (t_steady → end)</div>
+                <TempHistoryLegend />
+              </div>
+              {tSplit != null ? (
+                <TempHistoryChart
+                  state={state}
+                  initialTempK={initialTempK}
+                  yRangeCOverride={historyRangeCOverride}
+                  tStart={tSplit}
+                  tEnd={state?.steady ? (state?.steadyAtTime ?? undefined) : undefined}
+                  width={260}
+                  height={180}
+                />
+              ) : (
+                <div
+                  className="flex items-center justify-center text-xs text-muted-foreground italic border border-dashed border-border rounded-md"
+                  style={{ width: 260, height: 180 }}
+                >
+                  Waiting for steady state…
+                </div>
+              )}
+            </div>
           </div>
-          <TempHistoryChart
-            state={state}
-            initialTempK={initialTempK}
-            yRangeCOverride={historyRangeCOverride}
-            width={300}
-            height={140}
-          />
-        </div>
-      </div>
+        );
+      })()}
 
       <div className="grid grid-cols-3 gap-2 text-center text-xs">
         <Stat label="Center" value={`${centerC.toFixed(0)}°`} accent />
@@ -232,7 +266,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
     <div className="flex flex-col gap-0.5 font-mono">
       <span
         className={cookingDone ? "text-emerald-400" : "text-muted-foreground"}
-        title="T_edge (cell at the cooking-zone outer edge) ≥ 200°C (searing threshold)"
+        title="T_edge (cell at the cooking-zone outer edge) ≥ 150°C (Maillard threshold)"
       >
         ● Cooking ready = {cookingTime.toFixed(1)}s
       </span>

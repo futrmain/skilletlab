@@ -10,6 +10,11 @@ interface Props {
   searingC?: number;
   // Force a shared y range across cards (in °C). Markers are still kept inside.
   yRangeCOverride?: { min: number; max: number };
+  // Optional time-window filter — only samples with t in [tStart, tEnd] are
+  // drawn, and the x-axis is clamped to this window. tStart defaults to 0;
+  // tEnd defaults to "the latest sample time within the window".
+  tStart?: number;
+  tEnd?: number;
 }
 
 const COL = {
@@ -25,9 +30,11 @@ export function TempHistoryChart({
   initialTempK,
   width = 320,
   height = 140,
-  maillardC = 140,
+  maillardC = 150,
   searingC = 200,
   yRangeCOverride,
+  tStart,
+  tEnd,
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -48,8 +55,19 @@ export function TempHistoryChart({
     const w = width - pad.l - pad.r;
     const h = height - pad.t - pad.b;
 
-    const hist = state?.history ?? [];
-    const tMax = Math.max(1e-3, hist.length > 0 ? hist[hist.length - 1].t : 0);
+    const histAll = state?.history ?? [];
+    const t0 = tStart ?? 0;
+    // Pick the samples that fall inside the window. Allow a tiny epsilon at
+    // the boundaries so a sample landing exactly on tStart/tEnd is kept.
+    const hist: typeof histAll = [];
+    for (const s of histAll) {
+      if (s.t < t0 - 1e-9) continue;
+      if (tEnd !== undefined && s.t > tEnd + 1e-9) continue;
+      hist.push(s);
+    }
+    const latest = hist.length > 0 ? hist[hist.length - 1].t : t0;
+    const tHi = tEnd !== undefined ? tEnd : Math.max(latest, t0 + 1e-3);
+    const tSpan = Math.max(1e-9, tHi - t0);
 
     // y range — must cover data + both markers, with a touch of headroom.
     // When an override is supplied (sync-scales mode), seed with the override
@@ -88,12 +106,12 @@ export function TempHistoryChart({
       ctx.fillText(`${v.toFixed(0)}°`, 4, y + 3);
     }
 
-    // x axis labels
+    // x axis labels — show the actual window endpoints.
     ctx.fillStyle = "rgba(220,220,220,0.6)";
-    ctx.fillText("0", pad.l - 2, height - 6);
-    ctx.fillText(`${tMax.toFixed(1)} s`, pad.l + w - 36, height - 6);
+    ctx.fillText(`${t0.toFixed(1)} s`, pad.l - 2, height - 6);
+    ctx.fillText(`${tHi.toFixed(1)} s`, pad.l + w - 36, height - 6);
 
-    const xOf = (t: number) => pad.l + (t / tMax) * w;
+    const xOf = (t: number) => pad.l + ((t - t0) / tSpan) * w;
     const yOf = (Tc: number) => pad.t + h * (1 - (Tc - yMinC) / (yMaxC - yMinC));
 
     // horizontal markers
@@ -121,6 +139,8 @@ export function TempHistoryChart({
     initialTempK,
     yRangeCOverride?.min,
     yRangeCOverride?.max,
+    tStart,
+    tEnd,
   ]);
 
   return <canvas ref={ref} />;

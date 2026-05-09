@@ -30,6 +30,11 @@ export function PanView({
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
+  // Internal: total canvas width = heatmap diameter (`size`) + colorbar strip.
+  const colorbarStripW = 44;
+  const canvasW = size + colorbarStripW;
+  const canvasH = size;
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -37,15 +42,16 @@ export function PanView({
     if (!ctx) return;
     const w = canvas.width;
     const h = canvas.height;
+    const heatmapW = size; // first `size` pixels host the circular heatmap
     const img = ctx.createImageData(w, h);
-    const cx = w / 2;
+    const cx = heatmapW / 2;
     const cy = h / 2;
-    const radiusPx = Math.min(w, h) / 2 - 8;
+    const radiusPx = Math.min(heatmapW, h) / 2 - 8;
     const range = Math.max(1e-6, tMax - tMin);
 
     const N = T.length;
     for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
+      for (let x = 0; x < heatmapW; x++) {
         const dx = x - cx;
         const dy = y - cy;
         const d = Math.sqrt(dx * dx + dy * dy);
@@ -124,14 +130,47 @@ export function PanView({
     ctx.beginPath();
     ctx.arc(cx, cy, radiusPx, 0, Math.PI * 2);
     ctx.stroke();
-  }, [T, r, panRadius, cookingRadius, heaterRadius, heaterThickness, tMin, tMax, tick]);
+
+    // ---- Colorbar strip (right side) ----
+    const stripX = heatmapW + 6;
+    const stripW = 12;
+    const stripY = Math.round(h * 0.08);
+    const stripH = h - 2 * stripY;
+    // Fill the gradient row by row using the same thermal colormap.
+    const tmp = new Uint8ClampedArray(4);
+    for (let py = 0; py < stripH; py++) {
+      const norm = 1 - py / Math.max(1, stripH - 1); // 0 at bottom → 1 at top
+      thermalColorRGBA(norm, tmp, 0);
+      ctx.fillStyle = `rgba(${tmp[0]},${tmp[1]},${tmp[2]},${tmp[3] / 255})`;
+      ctx.fillRect(stripX, stripY + py, stripW, 1);
+    }
+    // Outline.
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(stripX + 0.5, stripY + 0.5, stripW - 1, stripH - 1);
+
+    // Labels (°C). Fit comfortably to the right of the strip.
+    ctx.fillStyle = "rgba(220,220,220,0.85)";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    const labelX = stripX + stripW + 3;
+    const tMinC = tMin - 273.15;
+    const tMaxC = tMax - 273.15;
+    const tMidC = (tMinC + tMaxC) * 0.5;
+    ctx.fillText(`${tMaxC.toFixed(0)}°`, labelX, stripY + 4);
+    ctx.fillText(`${tMidC.toFixed(0)}°`, labelX, stripY + stripH / 2);
+    ctx.fillText(`${tMinC.toFixed(0)}°`, labelX, stripY + stripH - 4);
+    // Reset baseline so we don't surprise other ctx state outside this effect.
+    ctx.textBaseline = "alphabetic";
+  }, [T, r, panRadius, cookingRadius, heaterRadius, heaterThickness, tMin, tMax, tick, size]);
 
   return (
     <canvas
       ref={canvasRef}
-      width={size}
-      height={size}
-      style={{ width: size, height: size, display: "block" }}
+      width={canvasW}
+      height={canvasH}
+      style={{ width: canvasW, height: canvasH, display: "block" }}
     />
   );
 }

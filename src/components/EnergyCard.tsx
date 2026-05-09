@@ -135,7 +135,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
     <div className="flex flex-col gap-0.5 font-mono">
       <span
         className={cookingDone ? "text-emerald-400" : "text-muted-foreground"}
-        title="T_edge (cell at the cooking-zone outer edge) ≥ 200°C (searing threshold)"
+        title="T_edge (cell at the cooking-zone outer edge) ≥ 150°C (Maillard threshold)"
       >
         ● Cooking ready = {cookingTime.toFixed(1)}s
       </span>

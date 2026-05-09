@@ -139,7 +139,7 @@ export interface SimState {
   lastCycleAvgTedge: number | null; // avg T_edge over the most recently completed cycle (K)
   prevCycleAvgTedge: number | null; // avg T_edge over the cycle before that (K)
   // "Cooking ready" — sim time at which T_edge on the top surface first reaches
-  // the searing threshold (the cooking-edge cell is hot enough).
+  // the Maillard threshold (the cooking-edge cell is hot enough to brown food).
   cookingReadyAtTime: number | null;
 
   // Steak ("cooked food") — placed on the pan at the centre once the pan
@@ -216,8 +216,11 @@ export function effectiveProps(layers: Layer[]) {
 }
 
 const SIGMA = 5.670374419e-8;
-// "Cooking ready" threshold — matches the searing marker on the time-history
-// chart (kept in sync manually; if you adjust one, adjust the other).
+// Reference temperatures shown on the temperature-history chart and used for
+// the "cooking ready" latch. Keep these in sync with TempHistoryChart's
+// defaults: the cooking-ready latch fires when T_edge crosses Maillard, and
+// the chart still displays a Sear reference line at 200 °C.
+export const MAILLARD_TEMP_K = 150 + 273.15;
 export const SEARING_TEMP_K = 200 + 273.15;
 
 export function initSim(params: SimParams): SimState {
@@ -977,11 +980,11 @@ export function step(state: SimState, substeps = 1) {
   const Tcenter = T2D[topRowOff];
   const Tedge = T2D[topRowOff + nInner - 1];
 
-  // Latch "cooking ready" — first time T_edge reaches the searing threshold
+  // Latch "cooking ready" — first time T_edge reaches the Maillard threshold
   // (the cooking-edge cell is the slowest to heat up under a centered heater,
-  // so once it's hot enough the rest of the cooking surface is too). Latched
-  // once.
-  if (state.cookingReadyAtTime === null && Tedge >= SEARING_TEMP_K) {
+  // so once it has crossed the Maillard temperature the rest of the cooking
+  // surface has too). Latched once.
+  if (state.cookingReadyAtTime === null && Tedge >= MAILLARD_TEMP_K) {
     state.cookingReadyAtTime = state.time;
   }
 

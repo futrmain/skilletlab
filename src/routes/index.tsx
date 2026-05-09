@@ -362,7 +362,7 @@ function Index() {
               <section className="panel p-5 space-y-3">
                 <div className="label-tag">Cooking ready time</div>
                 <p className="text-xs text-muted-foreground">
-                  Time until the cooking-edge cell reaches the searing threshold (T_edge ≥ 200°C).
+                  Time until the cooking-edge cell reaches the Maillard threshold (T_edge ≥ 150°C).
                   Pans that haven&apos;t reached it yet show as a dashed placeholder.
                 </p>
                 <div className="overflow-x-auto">
@@ -546,9 +546,9 @@ function Index() {
             <p className="text-xs text-muted-foreground">
               The steak is modelled as an axisymmetric cylinder centred on the pan. It is dropped
               onto the cooking surface the moment the pan first reaches its limit-cycle steady
-              state. The simulation continues until the steak is{" "}
-              <em>cooked throughout</em>, i.e. its coldest cell reaches the done temperature
-              above (≈ 50 °C rare, 55 °C medium-rare, 63 °C medium, 70 °C+ well-done).
+              state. The simulation continues until the steak is <em>cooked throughout</em>, i.e.
+              its coldest cell reaches the done temperature above (≈ 50 °C rare, 55 °C medium-rare,
+              63 °C medium, 70 °C+ well-done).
             </p>
           </section>
         </TabsContent>
@@ -599,16 +599,15 @@ function Index() {
               Stopping criterion (two phases when a steak is enabled):
               <br />
               <strong>Phase A</strong> — pan limit-cycle convergence. Track the average{" "}
-              <span className="font-mono">T_edge</span> (top-surface cell at the cooking-zone
-              outer edge) over each heater on/off cycle. When{" "}
-              <span className="font-mono">|Δavg(T_edge)| / avg(T_edge)_prev ≤ 2%</span>, the
-              limit cycle has stabilised. With no steak, this is the final criterion.
+              <span className="font-mono">T_edge</span> (top-surface cell at the cooking-zone outer
+              edge) over each heater on/off cycle. When{" "}
+              <span className="font-mono">|Δavg(T_edge)| / avg(T_edge)_prev ≤ 2%</span>, the limit
+              cycle has stabilised. With no steak, this is the final criterion.
               <br />
-              <strong>Phase B</strong> (only when a steak is enabled) — steak cooked through.
-              The steak is dropped at the end of Phase A and the simulation continues until the
-              coldest cell anywhere in the steak reaches the done temperature set on the
-              Cooking tab. <span className="font-mono">state.steady</span> latches at that
-              moment.
+              <strong>Phase B</strong> (only when a steak is enabled) — steak cooked through. The
+              steak is dropped at the end of Phase A and the simulation continues until the coldest
+              cell anywhere in the steak reaches the done temperature set on the Cooking tab.{" "}
+              <span className="font-mono">state.steady</span> latches at that moment.
             </p>
           </section>
 
