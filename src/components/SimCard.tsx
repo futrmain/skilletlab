@@ -259,6 +259,8 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
   const steakActive = state?.steakActive === true;
   const steakDone = state?.steakDroppedAt != null;
   const steakTime = steakDone ? (state?.steakDroppedAt ?? 0) : t;
+  const steakFlipped = state?.steakFlipped === true;
+  const steakFlipTime = steakFlipped ? (state?.steakFlippedAt ?? 0) : t;
   const steakEnabled = state?.params?.steakEnabled === true;
   const steadyDone = state?.steady === true;
   const steadyTime = steadyDone ? (state?.steadyAtTime ?? 0) : t;
@@ -276,6 +278,14 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
           title="Sim time at which the pan reached its first steady state and the steak was dropped"
         >
           ● Steak dropped = {steakTime.toFixed(1)}s
+        </span>
+      )}
+      {steakEnabled && (
+        <span
+          className={steakFlipped ? "text-emerald-400" : "text-muted-foreground"}
+          title="Sim time at which the steak's centre cell first reached 25°C and the steak was flipped (axial T reversal)"
+        >
+          ● Steak flipped = {steakFlipTime.toFixed(1)}s
         </span>
       )}
       <span

@@ -59,7 +59,7 @@ function Index() {
   // Steak ("cooked food") global config — applies to every simulation slot.
   const [steakEnabled, setSteakEnabled] = useState(true);
   const [steakDiameterCm, setSteakDiameterCm] = useState(10);
-  const [steakThicknessCm, setSteakThicknessCm] = useState(3);
+  const [steakThicknessCm, setSteakThicknessCm] = useState(1.5);
   const [steakDensity, setSteakDensity] = useState(1050);
   const [steakInitialTempC, setSteakInitialTempC] = useState(5);
   const [steakDoneTempC, setSteakDoneTempC] = useState(55);

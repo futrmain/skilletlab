@@ -51,10 +51,13 @@
 //   compare avg(T_edge)_last vs avg(T_edge)_prev. When the relative change is
 //   ≤ 2 % the pan has reached steady state.
 // Phase B (steak enabled): once Phase A fires, the steak is dropped onto the
-//   pan and the simulation continues. The final stopping criterion becomes
-//   "the steak is cooked throughout" — i.e. the coldest cell anywhere in the
-//   steak reaches the user's done temperature (default ≈ 55 °C, medium-rare).
-//   That latches state.steady = true.
+//   pan and the simulation continues. While Phase B runs, the steak is flipped
+//   in-place (axial reversal of T_steak) the first time its centre cell
+//   reaches STEAK_FLIP_TEMP_K — emulating turning the steak over halfway
+//   through cooking. The final stopping criterion is "the steak is cooked
+//   throughout": the coldest cell anywhere in the steak reaches the user's
+//   done temperature (default ≈ 55 °C, medium-rare). That latches
+//   state.steady = true.
 // When the steak is disabled the Phase A latch is the final one (state.steady
 // fires immediately on the first cycle convergence).
 
@@ -122,6 +125,7 @@ export interface SimState {
   heatedArea: Float64Array; // length Nr — bottom face area within heater ring
   nInner: number; // number of cells inside the cooking zone (rRight[nInner-1] = panRadius exactly)
   isExt: Uint8Array; // length Nr — 1 if cell i is in the rim zone (bottom face = air), 0 otherwise
+  iHeater: number; // index of the top-surface cell whose centre is closest to heaterRadius — drives the hysteresis
   // Base-plate stem: cells at (i ≥ nInner, j < jBase) are void (the stem stops
   // at panRadius). When jBase === 0 the cross-section is a plain rectangle
   // (current behaviour). When jBase > 0 the cross-section is a "squashed T":
@@ -162,6 +166,8 @@ export interface SimState {
   // explicitly through a contact face at z = H for cells under the steak.
   steakActive: boolean; // true after the steak has been dropped
   steakDroppedAt: number | null; // sim time when the steak was dropped (= first steady)
+  steakFlipped: boolean; // true after the one-time axial reversal of T_steak
+  steakFlippedAt: number | null; // sim time at which the flip occurred
   steakNr: number; // radial cells in the steak (= number of pan cells with rRight ≤ steakRadius)
   steakNz: number; // axial cells in the steak
   Tsteak: Float64Array; // length steakNr * steakNz, idx = k*steakNr + i (k axial, i radial)
@@ -241,6 +247,11 @@ const SIGMA = 5.670374419e-8;
 // the chart still displays a Sear reference line at 200 °C.
 export const MAILLARD_TEMP_K = 150 + 273.15;
 export const SEARING_TEMP_K = 200 + 273.15;
+// Centre-cell temperature at which the steak is flipped over in the pan
+// (axial reversal of T_steak). 25 °C is roughly the point at which the bottom
+// face has seared and the centre is still cool — a typical home-cook flip
+// trigger.
+export const STEAK_FLIP_TEMP_K = 25 + 273.15;
 
 export function initSim(params: SimParams): SimState {
   const { layers, panRadius, heaterRadius, heaterPower, initialTemp } = params;
@@ -358,6 +369,21 @@ export function initSim(params: SimParams): SimState {
   if (nC > 0) rLeft[nInner] = panRadius;
   const drFace = new Float64Array(Nr);
   for (let i = 1; i < Nr; i++) drFace[i] = r[i] - r[i - 1];
+
+  // Cooking-zone cell whose centre is closest to the heater's mean radius —
+  // its top-surface temperature drives the heater hysteresis (the heater
+  // sees the pan above it, not the geometric centre of the cooking surface).
+  let iHeater = 0;
+  if (nInner > 0) {
+    let bestDist = Infinity;
+    for (let i = 0; i < nInner; i++) {
+      const d = Math.abs(r[i] - heaterRadius);
+      if (d < bestDist) {
+        bestDist = d;
+        iHeater = i;
+      }
+    }
+  }
   const drMin = Math.min(
     drA > 0 ? drA : Infinity,
     drB > 0 ? drB : Infinity,
@@ -452,6 +478,7 @@ export function initSim(params: SimParams): SimState {
     nInner,
     isExt,
     jBase,
+    iHeater,
     k,
     rho,
     cp,
@@ -476,6 +503,8 @@ export function initSim(params: SimParams): SimState {
     localMinTcenter: Infinity,
     steakActive: false,
     steakDroppedAt: null,
+    steakFlipped: false,
+    steakFlippedAt: null,
     steakNr,
     steakNz,
     Tsteak,
@@ -554,6 +583,7 @@ export function step(state: SimState, substeps = 1) {
     nInner,
     isExt,
     jBase,
+    iHeater,
     k,
     rho,
     cp,
@@ -609,11 +639,14 @@ export function step(state: SimState, substeps = 1) {
   let maxDeltaT = 0; // peak |T_{n+1} − T_n| across all substeps + cells in this call
 
   for (let s = 0; s < substeps; s++) {
-    // Hysteresis decision frozen for the whole step (T at its start).
-    const Tcenter = T2D[topRowOff];
+    // Hysteresis decision frozen for the whole step (T at its start). The
+    // sensed temperature is the top-surface cell directly above the heater
+    // ring (i = iHeater) — this is what physically reaches the setpoint and
+    // tracks the heater behaviour, not the geometric centre.
+    const Thyst = T2D[topRowOff + iHeater];
     const prevHeaterOn = heaterOn;
-    if (heaterOn && Tcenter >= setHigh) heaterOn = false;
-    else if (!heaterOn && Tcenter <= setLow) heaterOn = true;
+    if (heaterOn && Thyst >= setHigh) heaterOn = false;
+    else if (!heaterOn && Thyst <= setLow) heaterOn = true;
     const heaterFactor = heaterOn ? 1 : 0;
 
     // Rising edge (off → on) closes the previous cycle and opens a new one.
@@ -1085,8 +1118,40 @@ export function step(state: SimState, substeps = 1) {
     const TedgeSub = T2D[topRowOff + nInner - 1];
     state.cycleTedgeIntegral += TedgeSub * dt;
 
-    // Phase-B stopping criterion: the steak is cooked throughout when the
-    // coldest cell anywhere in the steak reaches the user's done temperature.
+    // Cooking-ready latch — first time T_edge crosses the Maillard threshold.
+    // Captures the top-row T snapshot used by the Compare tab.
+    if (state.cookingReadyAtTime === null && TedgeSub >= MAILLARD_TEMP_K) {
+      state.cookingReadyAtTime = state.time;
+      state.tempProfileReady = state.T.slice();
+    }
+
+    // Steak flip — one-shot axial reversal of T_steak. Triggered the first
+    // time the steak's centre cell crosses STEAK_FLIP_TEMP_K. The reversal
+    // is purely a relabelling of cell temperatures (energy is preserved);
+    // the next substep's pan ↔ steak coupling sees the formerly-top face on
+    // the bottom and starts heating it.
+    if (state.steakActive && !state.steakFlipped && steakNr > 0 && steakNz > 0) {
+      const kCenter = Math.floor(steakNz / 2);
+      const Tcentre = Tsteak[kCenter * steakNr]; // i = 0, axial midpoint
+      if (Tcentre >= STEAK_FLIP_TEMP_K) {
+        for (let kk = 0; 2 * kk + 1 < steakNz; kk++) {
+          const k2 = steakNz - 1 - kk;
+          for (let i = 0; i < steakNr; i++) {
+            const a = kk * steakNr + i;
+            const b = k2 * steakNr + i;
+            const tmp = Tsteak[a];
+            Tsteak[a] = Tsteak[b];
+            Tsteak[b] = tmp;
+          }
+        }
+        state.steakFlipped = true;
+        state.steakFlippedAt = state.time;
+      }
+    }
+
+    // Final stopping criterion when the steak is enabled: the steak is
+    // cooked throughout when the coldest cell anywhere in the steak reaches
+    // the user's done temperature.
     if (state.steakActive && !state.steady && steakNr > 0 && steakNz > 0) {
       let TsteakMin = Infinity;
       for (let ii = 0; ii < Tsteak.length; ii++) {
@@ -1160,15 +1225,9 @@ export function step(state: SimState, substeps = 1) {
   const Tcenter = T2D[topRowOff];
   const Tedge = T2D[topRowOff + nInner - 1];
 
-  // Latch "cooking ready" — first time T_edge reaches the Maillard threshold
-  // (the cooking-edge cell is the slowest to heat up under a centered heater,
-  // so once it has crossed the Maillard temperature the rest of the cooking
-  // surface has too). Latched once.
-  if (state.cookingReadyAtTime === null && Tedge >= MAILLARD_TEMP_K) {
-    state.cookingReadyAtTime = state.time;
-    // Snapshot the top-row T at this milestone for the Compare tab.
-    state.tempProfileReady = state.T.slice();
-  }
+  // (Cooking-ready latch + steak-drop trigger are inside the substep loop —
+  // see TedgeSub block above — so the steak starts cooking as soon as the
+  // surface is hot enough.)
 
   // History sampling rate: take a snapshot only every `historyIntervalSec` of
   // sim time (default 2 s) — typical sims advance many step()s per second of
