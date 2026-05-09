@@ -55,6 +55,7 @@ function Index() {
   const [nzPerLayer, setNzPerLayer] = useState(1);
   const [nzSteak, setNzSteak] = useState(8);
   const [dtSec, setDtSec] = useState(0.05);
+  const [steadyWindowSec, setSteadyWindowSec] = useState(30);
   const [syncScales, setSyncScales] = useState(true);
   // Steak ("cooked food") global config — applies to every simulation slot.
   const [steakEnabled, setSteakEnabled] = useState(true);
@@ -79,13 +80,31 @@ function Index() {
       running: false,
       resetTick: 0,
     },
+    {
+      key: uid(),
+      panId: "tpl-carbon-steel",
+      heaterId: "tpl-induction",
+      running: false,
+      resetTick: 0,
+    },
+    {
+      key: uid(),
+      panId: "tpl-copper-core",
+      heaterId: "tpl-induction",
+      running: false,
+      resetTick: 0,
+    },
   ]);
 
   // Default-fill missing pan/heater ids when configs become available
   const filledSlots = slots.map((s) => ({
     ...s,
     panId: pans.find((p) => p.id === s.panId)?.id ?? pans[0]?.id ?? "",
-    heaterId: heaters.find((h) => h.id === s.heaterId)?.id ?? heaters[0]?.id ?? "",
+    heaterId:
+      heaters.find((h) => h.id === s.heaterId)?.id ??
+      heaters.find((h) => h.id === "tpl-induction")?.id ??
+      heaters[0]?.id ??
+      "",
   }));
 
   const inputs: SimInput[] = useMemo(() => {
@@ -110,6 +129,7 @@ function Index() {
           nr: nrCells,
           nzPerLayer,
           dt: dtSec,
+          steadyWindowSec,
           steakEnabled,
           steakRadius: steakDiameterCm / 2 / 100,
           steakThickness: steakThicknessCm / 100,
@@ -136,6 +156,7 @@ function Index() {
     nzPerLayer,
     nzSteak,
     dtSec,
+    steadyWindowSec,
     steakEnabled,
     steakDiameterCm,
     steakThicknessCm,
@@ -178,7 +199,7 @@ function Index() {
       {
         key: uid(),
         panId: pans[0]?.id ?? "",
-        heaterId: heaters[0]?.id ?? "",
+        heaterId: heaters.find((h) => h.id === "tpl-induction")?.id ?? heaters[0]?.id ?? "",
         running: false,
         resetTick: 0,
       },
@@ -597,6 +618,14 @@ function Index() {
               max={5}
               onChange={setDtSec}
             />
+            <NumberField
+              label="Steady-state window (s)"
+              value={steadyWindowSec}
+              step={5}
+              min={1}
+              max={600}
+              onChange={setSteadyWindowSec}
+            />
             <p className="text-xs text-muted-foreground pt-2">
               The solver is a 2D axisymmetric finite-volume scheme on a (z, r) grid, integrated in
               time with implicit Crank–Nicolson via Peaceman–Rachford ADI (each half-step is a
@@ -607,11 +636,13 @@ function Index() {
             <p className="text-xs text-muted-foreground">
               Stopping criterion (two phases when a steak is enabled):
               <br />
-              <strong>Phase A</strong> — pan limit-cycle convergence. Track the average{" "}
-              <span className="font-mono">T_edge</span> (top-surface cell at the cooking-zone outer
-              edge) over each heater on/off cycle. When{" "}
-              <span className="font-mono">|Δavg(T_edge)| / avg(T_edge)_prev ≤ 2%</span>, the limit
-              cycle has stabilised. With no steak, this is the final criterion.
+              <strong>Phase A</strong> — pan steady on a sliding window. Time-integrate{" "}
+              <span className="font-mono">min(T_center, T_edge)</span> (top-surface cells at the
+              cooking-zone centre and outer edge — whichever is colder) over each non-overlapping{" "}
+              <span className="font-mono">steadyWindowSec</span> window. When the average of two
+              consecutive windows differs by{" "}
+              <span className="font-mono">≤ 2%</span>, the pan is steady. With no steak, this is the
+              final criterion.
               <br />
               <strong>Phase B</strong> (only when a steak is enabled) — steak cooked through. The
               steak is dropped at the end of Phase A and the simulation continues until the coldest

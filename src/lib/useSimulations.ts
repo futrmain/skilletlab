@@ -18,6 +18,7 @@ export interface SimInput {
   nr: number;
   nzPerLayer: number;
   dt: number;
+  steadyWindowSec: number;
   // Steak — same field set as SimParams.
   steakEnabled: boolean;
   steakRadius: number;

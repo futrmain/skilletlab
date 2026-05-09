@@ -45,11 +45,12 @@
 // (≈ floating-point round-off for this scheme) on a log-y axis.
 //
 // Stopping criteria — two-phase when the steak is enabled, single-phase otherwise.
-// Phase A (always): the heater hysteresis defines a natural limit cycle. We
-//   time-integrate T_edge (the top-surface cell at the cooking-zone outer edge,
-//   i = nInner − 1) over each cycle; once two complete cycles are in hand, we
-//   compare avg(T_edge)_last vs avg(T_edge)_prev. When the relative change is
-//   ≤ 2 % the pan has reached steady state.
+// Phase A (always): a fixed-width sliding window over min(T_center, T_edge)
+//   on the top surface (the slowest-converging top-surface cell of the two).
+//   We time-integrate that metric over each non-overlapping window of width
+//   `steadyWindowSec` (user-controlled, default 30 s). When two consecutive
+//   completed window averages differ by ≤ 2 %, the pan has reached steady
+//   state.
 // Phase B (steak enabled): once Phase A fires, the steak is dropped onto the
 //   pan and the simulation continues. While Phase B runs, the steak is flipped
 //   in-place (axial reversal of T_steak) the first time its centre cell
@@ -89,6 +90,7 @@ export interface SimParams {
   nr: number; // number of radial cells (target total — split between cooking zone and rim)
   nzPerLayer: number; // axial cells per material layer (>=1)
   dt: number; // s — Crank–Nicolson time step (user-controlled, accuracy-bounded)
+  steadyWindowSec: number; // s — width of the sliding window used by the steady-state detector
   // Steak (cooked food) — added at the centre of the pan once the pan reaches
   // its first steady state. The steak is an axisymmetric cylinder placed on
   // top of the cooking surface (z = H), r ∈ [0, steakRadius].
@@ -142,15 +144,16 @@ export interface SimState {
   // CN diagnostics (mesh+material+dt only — known at setup)
   maxFoR: number; // max α·dt/dr² across cells
   maxFoZ: number; // max α·dt/dz² across cells
-  // Steady-state detection — cycle-based:
-  //   Average T_edge over each heater on/off cycle (rising edge → rising edge).
-  //   Steady when |avg(T_edge)_last − avg(T_edge)_prev| / avg(T_edge)_prev ≤ 2%.
+  // Steady-state detection — sliding-window over min(T_center, T_edge):
+  //   Time-integrate the metric over each non-overlapping window of width
+  //   params.steadyWindowSec. Steady when the avg of the most recently
+  //   completed window vs the window before that differs by ≤ 2 %.
   steady: boolean;
   steadyAtTime: number | null; // sim time at which the criterion first fired
-  cycleStartTime: number; // sim time at which the current cycle began
-  cycleTedgeIntegral: number; // ∫T_edge dt accumulated over the current cycle (K·s)
-  lastCycleAvgTedge: number | null; // avg T_edge over the most recently completed cycle (K)
-  prevCycleAvgTedge: number | null; // avg T_edge over the cycle before that (K)
+  windowStartTime: number; // sim time at which the current window began
+  windowIntegral: number; // ∫min(T_center, T_edge) dt over the current window (K·s)
+  lastWindowAvg: number | null; // avg metric over the most recently completed window (K)
+  prevWindowAvg: number | null; // avg metric over the window before that (K)
   // "Cooking ready" — sim time at which T_edge on the top surface first reaches
   // the Maillard threshold (the cooking-edge cell is hot enough to brown food).
   cookingReadyAtTime: number | null;
@@ -491,10 +494,10 @@ export function initSim(params: SimParams): SimState {
     maxFoZ,
     steady: false,
     steadyAtTime: null,
-    cycleStartTime: 0,
-    cycleTedgeIntegral: 0,
-    lastCycleAvgTedge: null,
-    prevCycleAvgTedge: null,
+    windowStartTime: 0,
+    windowIntegral: 0,
+    lastWindowAvg: null,
+    prevWindowAvg: null,
     cookingReadyAtTime: null,
     tempProfileReady: null,
     tempProfileSteady: null,
@@ -638,51 +641,17 @@ export function step(state: SimState, substeps = 1) {
   let heaterOn = state.heaterOn;
   let maxDeltaT = 0; // peak |T_{n+1} − T_n| across all substeps + cells in this call
 
+  const windowSizeSec = Math.max(1e-3, params.steadyWindowSec);
+
   for (let s = 0; s < substeps; s++) {
     // Hysteresis decision frozen for the whole step (T at its start). The
     // sensed temperature is the top-surface cell directly above the heater
     // ring (i = iHeater) — this is what physically reaches the setpoint and
     // tracks the heater behaviour, not the geometric centre.
     const Thyst = T2D[topRowOff + iHeater];
-    const prevHeaterOn = heaterOn;
     if (heaterOn && Thyst >= setHigh) heaterOn = false;
     else if (!heaterOn && Thyst <= setLow) heaterOn = true;
     const heaterFactor = heaterOn ? 1 : 0;
-
-    // Rising edge (off → on) closes the previous cycle and opens a new one.
-    if (!prevHeaterOn && heaterOn) {
-      const cycleDuration = state.time - state.cycleStartTime;
-      if (cycleDuration > 0) {
-        const avgTedge = state.cycleTedgeIntegral / cycleDuration;
-        state.prevCycleAvgTedge = state.lastCycleAvgTedge;
-        state.lastCycleAvgTedge = avgTedge;
-        if (!state.steady && state.prevCycleAvgTedge !== null && state.prevCycleAvgTedge > 0) {
-          const relChange = Math.abs(avgTedge - state.prevCycleAvgTedge) / state.prevCycleAvgTedge;
-          if (relChange <= 0.02) {
-            if (params.steakEnabled && !state.steakActive && steakNr > 0 && steakNz > 0) {
-              // Phase A → Phase B: drop the steak and keep simulating. The
-              // final stopping criterion is now "cooked throughout", checked
-              // after each substep below.
-              Tsteak.fill(params.steakInitialTemp);
-              state.steakActive = true;
-              state.steakDroppedAt = state.time;
-              state.lastCycleAvgTedge = null;
-              state.prevCycleAvgTedge = null;
-            } else if (!params.steakEnabled) {
-              // No steak phase — the pan's limit cycle is the final criterion.
-              state.steady = true;
-              state.steadyAtTime = state.time;
-              state.tempProfileSteady = state.T.slice();
-            }
-            // else: steak active. Cycle criterion is no longer the stopping
-            // condition; "steak cooked through" is. Just let the loop keep
-            // running.
-          }
-        }
-      }
-      state.cycleStartTime = state.time;
-      state.cycleTedgeIntegral = 0;
-    }
 
     // Linearise top-face radiation at T_n and snapshot T_n at the top row.
     // When the top row is itself part of the base-plate stem (jBase === Nz,
@@ -1113,10 +1082,46 @@ export function step(state: SimState, substeps = 1) {
     state.time += dt;
     eInput += heaterFactor * heaterPower * dt;
 
-    // Sample T_edge — the top-surface cell at the cooking-zone outer edge —
-    // and accumulate into the current cycle's integral.
+    // Sliding-window steady-state metric: min(T_center, T_edge) on the top
+    // surface. Both are typical "slow" cells (the cooking-zone centre and
+    // the cooking-zone outer edge); using the colder of the two ensures the
+    // criterion only fires once both have settled.
+    const TcenterSub = T2D[topRowOff];
     const TedgeSub = T2D[topRowOff + nInner - 1];
-    state.cycleTedgeIntegral += TedgeSub * dt;
+    const Tmetric = TcenterSub < TedgeSub ? TcenterSub : TedgeSub;
+    state.windowIntegral += Tmetric * dt;
+
+    // Window close: when at least `windowSizeSec` of sim time have elapsed
+    // since the window opened, finalise the average and check convergence.
+    if (state.time - state.windowStartTime >= windowSizeSec) {
+      const windowDuration = state.time - state.windowStartTime;
+      const avgWindow = state.windowIntegral / windowDuration;
+      state.prevWindowAvg = state.lastWindowAvg;
+      state.lastWindowAvg = avgWindow;
+      if (!state.steady && state.prevWindowAvg !== null && state.prevWindowAvg > 0) {
+        const relChange = Math.abs(avgWindow - state.prevWindowAvg) / state.prevWindowAvg;
+        if (relChange <= 0.02) {
+          if (params.steakEnabled && !state.steakActive && steakNr > 0 && steakNz > 0) {
+            // Phase A → Phase B: drop the steak and keep simulating. The
+            // final stopping criterion is now "cooked throughout".
+            Tsteak.fill(params.steakInitialTemp);
+            state.steakActive = true;
+            state.steakDroppedAt = state.time;
+            state.lastWindowAvg = null;
+            state.prevWindowAvg = null;
+          } else if (!params.steakEnabled) {
+            // No steak phase — the window-based pan steady is the final stop.
+            state.steady = true;
+            state.steadyAtTime = state.time;
+            state.tempProfileSteady = state.T.slice();
+          }
+          // else: steak active. Window criterion is no longer the stopping
+          // condition; "steak cooked through" is. Just let the loop run.
+        }
+      }
+      state.windowStartTime = state.time;
+      state.windowIntegral = 0;
+    }
 
     // Cooking-ready latch — first time T_edge crosses the Maillard threshold.
     // Captures the top-row T snapshot used by the Compare tab.

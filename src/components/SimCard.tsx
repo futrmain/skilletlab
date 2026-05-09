@@ -293,7 +293,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
         title={
           steakActive
             ? "Steak cooked throughout — the coldest cell reached the done temperature"
-            : "avg(T_edge) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+            : "avg(min(T_center, T_edge)) over the last sliding window changed by ≤ 2% from the previous window"
         }
       >
         ● Steady state = {steadyTime.toFixed(1)}s
