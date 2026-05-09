@@ -557,3 +557,308 @@ export function CompareLegend({ entries }: { entries: CompareEntry[] }) {
     </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Milestone-based comparison helpers — every chart below reads a SNAPSHOT
+// captured in the solver at one of three milestones (ready, steady, local
+// min after steak drop), via `picker(state)`.
+// ---------------------------------------------------------------------------
+
+export type SnapshotPicker = (state: SimState) => Float64Array | null;
+export type TimePicker = (state: SimState) => number | null;
+
+interface MProfileProps {
+  entries: CompareEntry[];
+  picker: SnapshotPicker;
+  width?: number;
+  height?: number;
+}
+
+// Overlaid radial profile for a single milestone — one line per pan, drawn
+// only for pans whose snapshot exists. Identical look to CompareProfileChart.
+export function CompareMilestoneProfileChart({
+  entries,
+  picker,
+  width = 520,
+  height = 280,
+}: MProfileProps) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = width * dpr;
+    c.height = height * dpr;
+    c.style.width = `${width}px`;
+    c.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    const pad = { l: 48, r: 12, t: 16, b: 28 };
+    const w = width - pad.l - pad.r;
+    const h = height - pad.t - pad.b;
+
+    let rMax = 0.001;
+    let tMin = Infinity;
+    let tMax = -Infinity;
+    let any = false;
+    for (const e of entries) {
+      const st = e.state;
+      const T = st ? picker(st) : null;
+      if (!st || !T || T.length === 0) continue;
+      any = true;
+      const physOuter = st.params.panRadius + st.params.rimHeight;
+      rMax = Math.max(rMax, physOuter);
+      for (let i = 0; i < T.length; i++) {
+        if (T[i] < tMin) tMin = T[i];
+        if (T[i] > tMax) tMax = T[i];
+      }
+    }
+    if (!any) {
+      ctx.fillStyle = "rgba(180,180,180,0.5)";
+      ctx.font = "11px ui-monospace, monospace";
+      ctx.textAlign = "center";
+      ctx.fillText("Not yet captured", pad.l + w / 2, pad.t + h / 2);
+      ctx.textAlign = "left";
+      return;
+    }
+    if (!Number.isFinite(tMin)) tMin = 293.15;
+    if (!Number.isFinite(tMax)) tMax = 343.15;
+    if (tMax - tMin < 50) tMax = tMin + 50;
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.fillStyle = "rgba(220,220,220,0.6)";
+    ctx.font = "10px ui-monospace, monospace";
+    for (let i = 0; i <= 5; i++) {
+      const y = pad.t + (h * i) / 5;
+      ctx.beginPath();
+      ctx.moveTo(pad.l, y);
+      ctx.lineTo(pad.l + w, y);
+      ctx.stroke();
+      const v = tMax - ((tMax - tMin) * i) / 5;
+      ctx.fillText(`${(v - 273.15).toFixed(0)}°C`, 4, y + 3);
+    }
+    for (let i = 0; i <= 4; i++) {
+      const x = pad.l + (w * i) / 4;
+      const r = (rMax * i) / 4;
+      ctx.fillText(`${(r * 100).toFixed(1)}cm`, x - 12, height - 8);
+    }
+    ctx.fillStyle = "rgba(180,180,180,0.7)";
+    ctx.fillText("radius →", pad.l + w - 60, pad.t - 4);
+
+    for (const e of entries) {
+      const st = e.state;
+      const T = st ? picker(st) : null;
+      if (!st || !T) continue;
+      const R = st.r;
+      ctx.strokeStyle = e.color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < T.length; i++) {
+        const x = pad.l + (R[i] / rMax) * w;
+        const norm = (T[i] - tMin) / (tMax - tMin);
+        const y = pad.t + h * (1 - norm);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+  }, [entries, picker, width, height]);
+  return <canvas ref={ref} />;
+}
+
+interface MTimeBarProps {
+  entries: CompareEntry[];
+  picker: TimePicker;
+  axisLabel: string; // y-axis title (e.g. "Time to ready (s)")
+  width?: number;
+  height?: number;
+}
+
+// Bars: one per pan, height = picker(state). Pans where picker returns null
+// render as a dashed placeholder slot.
+export function CompareMilestoneTimeBars({
+  entries,
+  picker,
+  axisLabel,
+  width = 520,
+  height = 240,
+}: MTimeBarProps) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = width * dpr;
+    c.height = height * dpr;
+    c.style.width = `${width}px`;
+    c.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    const pad = { l: 48, r: 16, t: 16, b: 64 };
+    const w = width - pad.l - pad.r;
+    const h = height - pad.t - pad.b;
+
+    const data = entries.map((e) => ({
+      e,
+      v: e.state ? picker(e.state) : null,
+    }));
+    const maxV = Math.max(10, ...data.map((d) => d.v ?? 0));
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.fillStyle = "rgba(220,220,220,0.6)";
+    ctx.font = "10px ui-monospace, monospace";
+    for (let i = 0; i <= 5; i++) {
+      const y = pad.t + (h * i) / 5;
+      ctx.beginPath();
+      ctx.moveTo(pad.l, y);
+      ctx.lineTo(pad.l + w, y);
+      ctx.stroke();
+      const v = maxV - (maxV * i) / 5;
+      ctx.fillText(`${v.toFixed(0)}`, 4, y + 3);
+    }
+
+    if (data.length === 0) return;
+    const slot = w / data.length;
+    const barW = Math.min(56, slot * 0.6);
+    data.forEach((d, i) => {
+      const x = pad.l + slot * i + (slot - barW) / 2;
+      if (d.v != null) {
+        const bh = (d.v / maxV) * h;
+        const y = pad.t + (h - bh);
+        ctx.fillStyle = d.e.color;
+        ctx.fillRect(x, y, barW, bh);
+        ctx.fillStyle = "rgba(240,240,240,0.95)";
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(`${d.v.toFixed(1)} s`, x + barW / 2, y - 4);
+      } else {
+        ctx.strokeStyle = d.e.color;
+        ctx.setLineDash([3, 3]);
+        ctx.strokeRect(x, pad.t + h - 6, barW, 6);
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(200,200,200,0.55)";
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("—", x + barW / 2, pad.t + h - 10);
+      }
+      ctx.fillStyle = "rgba(200,200,200,0.8)";
+      ctx.font = "10px ui-monospace, monospace";
+      const label = d.e.label.length > 18 ? d.e.label.slice(0, 17) + "…" : d.e.label;
+      ctx.save();
+      ctx.translate(x + barW / 2, pad.t + h + 8);
+      ctx.rotate(-Math.PI / 6);
+      ctx.textAlign = "right";
+      ctx.fillText(label, 0, 8);
+      ctx.restore();
+    });
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(180,180,180,0.7)";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText(axisLabel, pad.l, pad.t - 4);
+  }, [entries, picker, axisLabel, width, height]);
+  return <canvas ref={ref} />;
+}
+
+interface MDeltaProps {
+  entries: CompareEntry[];
+  picker: SnapshotPicker; // returns top-row T at this milestone
+  axisLabel: string; // e.g. "ΔT at ready (T_max − T_edge)"
+  width?: number;
+  height?: number;
+}
+
+// Bars: one per pan, height = T_max − T_edge computed from a snapshot.
+export function CompareMilestoneDeltaBars({
+  entries,
+  picker,
+  axisLabel,
+  width = 520,
+  height = 240,
+}: MDeltaProps) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const c = ref.current;
+    if (!c) return;
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = width * dpr;
+    c.height = height * dpr;
+    c.style.width = `${width}px`;
+    c.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, height);
+    const pad = { l: 48, r: 16, t: 16, b: 64 };
+    const w = width - pad.l - pad.r;
+    const h = height - pad.t - pad.b;
+
+    const data = entries.map((e) => {
+      const st = e.state;
+      const T = st ? picker(st) : null;
+      if (!st || !T || T.length === 0) return { e, delta: null as number | null };
+      const nIn = st.nInner;
+      let hi = -Infinity;
+      for (let i = 0; i < nIn; i++) if (T[i] > hi) hi = T[i];
+      const edge = T[nIn - 1];
+      return { e, delta: Math.max(0, hi - edge) };
+    });
+    const maxDelta = Math.max(10, ...data.map((d) => d.delta ?? 0));
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.fillStyle = "rgba(220,220,220,0.6)";
+    ctx.font = "10px ui-monospace, monospace";
+    for (let i = 0; i <= 5; i++) {
+      const y = pad.t + (h * i) / 5;
+      ctx.beginPath();
+      ctx.moveTo(pad.l, y);
+      ctx.lineTo(pad.l + w, y);
+      ctx.stroke();
+      const v = maxDelta - (maxDelta * i) / 5;
+      ctx.fillText(`${v.toFixed(0)}°`, 4, y + 3);
+    }
+
+    if (data.length === 0) return;
+    const slot = w / data.length;
+    const barW = Math.min(56, slot * 0.6);
+    data.forEach((d, i) => {
+      const x = pad.l + slot * i + (slot - barW) / 2;
+      if (d.delta != null) {
+        const bh = (d.delta / maxDelta) * h;
+        const y = pad.t + (h - bh);
+        ctx.fillStyle = d.e.color;
+        ctx.fillRect(x, y, barW, bh);
+        ctx.fillStyle = "rgba(240,240,240,0.95)";
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText(`${d.delta.toFixed(1)}°`, x + barW / 2, y - 4);
+      } else {
+        ctx.strokeStyle = d.e.color;
+        ctx.setLineDash([3, 3]);
+        ctx.strokeRect(x, pad.t + h - 6, barW, 6);
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(200,200,200,0.55)";
+        ctx.font = "11px ui-monospace, monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("—", x + barW / 2, pad.t + h - 10);
+      }
+      ctx.fillStyle = "rgba(200,200,200,0.8)";
+      ctx.font = "10px ui-monospace, monospace";
+      const label = d.e.label.length > 18 ? d.e.label.slice(0, 17) + "…" : d.e.label;
+      ctx.save();
+      ctx.translate(x + barW / 2, pad.t + h + 8);
+      ctx.rotate(-Math.PI / 6);
+      ctx.textAlign = "right";
+      ctx.fillText(label, 0, 8);
+      ctx.restore();
+    });
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(180,180,180,0.7)";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText(axisLabel, pad.l, pad.t - 4);
+  }, [entries, picker, axisLabel, width, height]);
+  return <canvas ref={ref} />;
+}

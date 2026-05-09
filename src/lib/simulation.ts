@@ -141,6 +141,12 @@ export interface SimState {
   // "Cooking ready" — sim time at which T_edge on the top surface first reaches
   // the Maillard threshold (the cooking-edge cell is hot enough to brown food).
   cookingReadyAtTime: number | null;
+  // Top-row T snapshots captured at three milestones, used by the Compare tab.
+  tempProfileReady: Float64Array | null; // captured when cookingReadyAtTime latches
+  tempProfileSteady: Float64Array | null; // captured when steadyAtTime latches
+  tempProfileLocalMin: Float64Array | null; // captured at running-min T_center during steak phase
+  localMinAfterSteakAtTime: number | null;
+  localMinTcenter: number; // running min — Infinity until first sample during steak phase
 
   // Steak ("cooked food") — placed on the pan at the centre once the pan
   // first reaches steady state. Once active, the pan and steak are coupled
@@ -429,6 +435,11 @@ export function initSim(params: SimParams): SimState {
     lastCycleAvgTedge: null,
     prevCycleAvgTedge: null,
     cookingReadyAtTime: null,
+    tempProfileReady: null,
+    tempProfileSteady: null,
+    tempProfileLocalMin: null,
+    localMinAfterSteakAtTime: null,
+    localMinTcenter: Infinity,
     steakActive: false,
     steakDroppedAt: null,
     steakNr,
@@ -589,6 +600,7 @@ export function step(state: SimState, substeps = 1) {
               // No steak phase — the pan's limit cycle is the final criterion.
               state.steady = true;
               state.steadyAtTime = state.time;
+              state.tempProfileSteady = state.T.slice();
             }
             // else: steak active. Cycle criterion is no longer the stopping
             // condition; "steak cooked through" is. Just let the loop keep
@@ -931,6 +943,20 @@ export function step(state: SimState, substeps = 1) {
       if (TsteakMin >= params.steakDoneTemp) {
         state.steady = true;
         state.steadyAtTime = state.time;
+        state.tempProfileSteady = state.T.slice();
+      }
+    }
+
+    // Track running min of T_center during the steak phase. The snapshot is
+    // updated whenever a new min is found and naturally settles once the sim
+    // hits final-steady (the surrounding `if` then short-circuits on
+    // state.steady = true). For pan-only sims this branch never executes.
+    if (state.steakActive && !state.steady) {
+      const Tc = T2D[topRowOff];
+      if (Tc < state.localMinTcenter) {
+        state.localMinTcenter = Tc;
+        state.localMinAfterSteakAtTime = state.time;
+        state.tempProfileLocalMin = state.T.slice();
       }
     }
   }
@@ -986,6 +1012,8 @@ export function step(state: SimState, substeps = 1) {
   // surface has too). Latched once.
   if (state.cookingReadyAtTime === null && Tedge >= MAILLARD_TEMP_K) {
     state.cookingReadyAtTime = state.time;
+    // Snapshot the top-row T at this milestone for the Compare tab.
+    state.tempProfileReady = state.T.slice();
   }
 
   // History sampling rate: take a snapshot only every `historyIntervalSec` of

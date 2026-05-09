@@ -12,15 +12,16 @@ import { SimCard } from "@/components/SimCard";
 import { EnergyCard } from "@/components/EnergyCard";
 import { useSimulations, type SimInput } from "@/lib/useSimulations";
 import {
-  CompareProfileChart,
-  CompareDeltaBars,
-  CompareCookingReadyBars,
   CompareLegend,
-  CompareReadyVsSteadyScatter,
-  CompareSpreadVsReadyScatter,
+  CompareMilestoneProfileChart,
+  CompareMilestoneTimeBars,
+  CompareMilestoneDeltaBars,
   colorForIndex,
   type CompareEntry,
+  type SnapshotPicker,
+  type TimePicker,
 } from "@/components/CompareCharts";
+import { PanView } from "@/components/PanView";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -342,74 +343,82 @@ function Index() {
             </section>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <MilestoneSection
+                title="Ready to cook"
+                description="Top-surface temperatures captured the moment T_edge crossed the Maillard threshold (150 °C)."
+                entries={compareEntries}
+                snapshotPicker={(s) => s.tempProfileReady}
+                timePicker={(s) => s.cookingReadyAtTime}
+              />
+              <MilestoneSection
+                title="Steady state"
+                description="Top-surface temperatures captured at the simulation's final-steady moment (limit-cycle convergence with no steak, or 'cooked through' with a steak)."
+                entries={compareEntries}
+                snapshotPicker={(s) => s.tempProfileSteady}
+                timePicker={(s) => s.steadyAtTime}
+              />
+              <MilestoneSection
+                title="Local minimum after steak drop"
+                description="Top-surface temperatures at the running minimum of T_center observed during the steak phase. Captures the worst-case 'cold-shock' the cooking surface takes when the cold steak first touches it."
+                entries={compareEntries}
+                snapshotPicker={(s) => s.tempProfileLocalMin}
+                timePicker={(s) => s.localMinAfterSteakAtTime}
+              />
+
               <section className="panel p-5 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="label-tag">Radial Temperature Profiles</div>
-                  <div className="text-xs text-muted-foreground font-mono">
-                    t = {(snapshots[0]?.state?.time ?? 0).toFixed(1)}s
+                <div className="label-tag mb-2">Comparison metrics</div>
+                <CompareLegend entries={compareEntries} />
+                <div className="grid grid-cols-1 gap-3">
+                  <div className="space-y-1">
+                    <div className="label-tag">Time to ready (s)</div>
+                    <CompareMilestoneTimeBars
+                      entries={compareEntries}
+                      picker={(s) => s.cookingReadyAtTime}
+                      axisLabel="Time to ready (s)"
+                      width={Math.max(360, compareEntries.length * 90 + 100)}
+                      height={200}
+                    />
                   </div>
-                </div>
-                <CompareLegend entries={compareEntries} />
-                <div className="overflow-x-auto">
-                  <CompareProfileChart
-                    entries={compareEntries}
-                    width={Math.max(480, compareEntries.length * 50 + 400)}
-                    height={300}
-                  />
-                </div>
-              </section>
-
-              <section className="panel p-5 space-y-3">
-                <div className="label-tag">Cooking ready time</div>
-                <p className="text-xs text-muted-foreground">
-                  Time until the cooking-edge cell reaches the Maillard threshold (T_edge ≥ 150°C).
-                  Pans that haven&apos;t reached it yet show as a dashed placeholder.
-                </p>
-                <div className="overflow-x-auto">
-                  <CompareCookingReadyBars
-                    entries={compareEntries}
-                    width={Math.max(360, compareEntries.length * 90 + 100)}
-                    height={280}
-                  />
-                </div>
-              </section>
-
-              <section className="panel p-5 space-y-3">
-                <div className="label-tag">Temperature Spread (T_max − T_edge)</div>
-                <p className="text-xs text-muted-foreground">
-                  Lower bars mean more uniform heat distribution across the pan surface.
-                </p>
-                <div className="overflow-x-auto">
-                  <CompareDeltaBars
-                    entries={compareEntries}
-                    width={Math.max(360, compareEntries.length * 90 + 100)}
-                    height={280}
-                  />
-                </div>
-              </section>
-
-              <section className="panel p-5 space-y-3">
-                <div className="label-tag">Cooking ready vs Steady state</div>
-                <p className="text-xs text-muted-foreground">
-                  One point per simulation, plotted once both milestones latch. Closer to the dashed{" "}
-                  <span className="font-mono">y = x</span> line means the cooking surface stabilises
-                  shortly after first being hot enough.
-                </p>
-                <CompareLegend entries={compareEntries} />
-                <div className="overflow-x-auto">
-                  <CompareReadyVsSteadyScatter entries={compareEntries} width={460} height={320} />
-                </div>
-              </section>
-
-              <section className="panel p-5 space-y-3">
-                <div className="label-tag">Spread vs Cooking ready time</div>
-                <p className="text-xs text-muted-foreground">
-                  Current top-surface spread (T_max − T_edge) plotted against cooking-ready time.
-                  Lower-left is the goal: fast to ready and uniform.
-                </p>
-                <CompareLegend entries={compareEntries} />
-                <div className="overflow-x-auto">
-                  <CompareSpreadVsReadyScatter entries={compareEntries} width={460} height={320} />
+                  <div className="space-y-1">
+                    <div className="label-tag">Time to steady (s)</div>
+                    <CompareMilestoneTimeBars
+                      entries={compareEntries}
+                      picker={(s) => s.steadyAtTime}
+                      axisLabel="Time to steady (s)"
+                      width={Math.max(360, compareEntries.length * 90 + 100)}
+                      height={200}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="label-tag">ΔT at ready (°C)</div>
+                    <CompareMilestoneDeltaBars
+                      entries={compareEntries}
+                      picker={(s) => s.tempProfileReady}
+                      axisLabel="T_max − T_edge at ready"
+                      width={Math.max(360, compareEntries.length * 90 + 100)}
+                      height={200}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="label-tag">ΔT at steady (°C)</div>
+                    <CompareMilestoneDeltaBars
+                      entries={compareEntries}
+                      picker={(s) => s.tempProfileSteady}
+                      axisLabel="T_max − T_edge at steady"
+                      width={Math.max(360, compareEntries.length * 90 + 100)}
+                      height={200}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="label-tag">ΔT at local min (°C)</div>
+                    <CompareMilestoneDeltaBars
+                      entries={compareEntries}
+                      picker={(s) => s.tempProfileLocalMin}
+                      axisLabel="T_max − T_edge at local min"
+                      width={Math.max(360, compareEntries.length * 90 + 100)}
+                      height={200}
+                    />
+                  </div>
                 </div>
               </section>
             </div>
@@ -717,6 +726,94 @@ function Toolbar({
         Ambient {ambient}°C · h={hConv} W/m²K
       </div>
     </div>
+  );
+}
+
+function MilestoneSection({
+  title,
+  description,
+  entries,
+  snapshotPicker,
+  timePicker,
+}: {
+  title: string;
+  description: string;
+  entries: CompareEntry[];
+  snapshotPicker: SnapshotPicker;
+  timePicker: TimePicker;
+}) {
+  // Synced colourbar range across all pans for THIS milestone.
+  let mTMin = Infinity;
+  let mTMax = -Infinity;
+  for (const e of entries) {
+    const T = e.state ? snapshotPicker(e.state) : null;
+    if (!T) continue;
+    for (let i = 0; i < T.length; i++) {
+      if (T[i] < mTMin) mTMin = T[i];
+      if (T[i] > mTMax) mTMax = T[i];
+    }
+  }
+  if (!Number.isFinite(mTMin)) {
+    mTMin = 293.15;
+    mTMax = 343.15;
+  }
+  if (mTMax - mTMin < 50) mTMax = mTMin + 50;
+
+  return (
+    <section className="panel p-5 space-y-3">
+      <div className="label-tag">{title}</div>
+      <p className="text-xs text-muted-foreground">{description}</p>
+      <div className="flex flex-wrap gap-3">
+        {entries.map((e) => {
+          const st = e.state;
+          const snap = st ? snapshotPicker(st) : null;
+          const tAt = st ? timePicker(st) : null;
+          return (
+            <div key={e.key} className="flex flex-col items-center gap-1 text-xs">
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="inline-block w-2.5 h-2.5 rounded-sm"
+                  style={{ background: e.color }}
+                />
+                <span className="text-foreground">{e.label}</span>
+              </span>
+              <span className="text-muted-foreground font-mono">
+                {tAt != null ? `t = ${tAt.toFixed(1)}s` : "—"}
+              </span>
+              {snap && st ? (
+                <PanView
+                  T={snap}
+                  r={st.r}
+                  panRadius={st.params.panRadius + st.params.rimHeight}
+                  cookingRadius={st.params.panRadius}
+                  heaterRadius={Math.min(st.params.heaterRadius, st.params.panRadius)}
+                  heaterThickness={st.params.heaterThickness}
+                  tMin={mTMin}
+                  tMax={mTMax}
+                  tick={tAt ?? 0}
+                  size={140}
+                />
+              ) : (
+                <div
+                  className="flex items-center justify-center text-xs text-muted-foreground italic border border-dashed border-border rounded-md"
+                  style={{ width: 184, height: 140 }}
+                >
+                  Not yet captured
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <div className="overflow-x-auto">
+        <CompareMilestoneProfileChart
+          entries={entries}
+          picker={snapshotPicker}
+          width={Math.max(420, entries.length * 50 + 360)}
+          height={260}
+        />
+      </div>
+    </section>
   );
 }
 
