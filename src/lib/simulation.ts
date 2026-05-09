@@ -65,6 +65,10 @@ export interface Layer {
   rho: number; // kg/m^3
   cp: number; // J/kg·K
   emissivity?: number; // 0-1, optional override (else uses MATERIALS[name].emissivity)
+  // When true, this layer is part of the "base plate" stem: its mesh stops at
+  // panRadius (rim cells are void). Only valid as a contiguous block from
+  // layer 0 — i.e. layer i can be a base plate iff i === 0 or layer i−1 is.
+  basePlate?: boolean;
 }
 
 export interface SimParams {
@@ -118,6 +122,11 @@ export interface SimState {
   heatedArea: Float64Array; // length Nr — bottom face area within heater ring
   nInner: number; // number of cells inside the cooking zone (rRight[nInner-1] = panRadius exactly)
   isExt: Uint8Array; // length Nr — 1 if cell i is in the rim zone (bottom face = air), 0 otherwise
+  // Base-plate stem: cells at (i ≥ nInner, j < jBase) are void (the stem stops
+  // at panRadius). When jBase === 0 the cross-section is a plain rectangle
+  // (current behaviour). When jBase > 0 the cross-section is a "squashed T":
+  // a wide top slab over a narrower stem.
+  jBase: number; // axial index of the lowest non-base-plate cell (= nBaseLayers · nzPerLayer)
   k: Float64Array; // length Nz
   rho: Float64Array; // length Nz
   cp: Float64Array; // length Nz
@@ -182,6 +191,10 @@ export interface SimState {
   TnTopBuf: Float64Array; // length Nr — T_n at top row, snapshot for energy tally
   hBotBuf: Float64Array; // length Nr — H_bot[i] for rim cells (0 in cooking zone)
   TnBotBuf: Float64Array; // length Nr — T_n at bottom row, snapshot for energy tally
+  // Base-plate stem outer-side air loss (radial face at r = panRadius for the
+  // cells at i = nInner − 1, j < jBase). All-zero when jBase === 0.
+  hStemSideBuf: Float64Array; // length Nz — Robin coefficient W/K (0 for j ≥ jBase)
+  TnStemSideBuf: Float64Array; // length Nz — T_n snapshot at the stem outer-side column
   // Tridiagonal scratches (sized to max(Nr, Nz))
   tdSub: Float64Array;
   tdDiag: Float64Array;
@@ -238,8 +251,19 @@ export function initSim(params: SimParams): SimState {
   const ringIn = Math.max(0, heaterRadius - heaterT / 2);
   const ringOut = Math.min(panRadius, heaterRadius + heaterT / 2);
 
+  // ---- Base-plate stem: the longest contiguous block of layers from the
+  // bottom that are flagged basePlate. The stem stops at panRadius (rim cells
+  // are void for j < jBase). The user-facing constraint is enforced in the
+  // editor; here we simply count from layer 0 until the chain breaks.
+  let nBaseLayers = 0;
+  for (let l = 0; l < layers.length; l++) {
+    if (layers[l].basePlate === true) nBaseLayers = l + 1;
+    else break;
+  }
+
   // ---- Axial mesh ------------------------------------------------------
   const Nz = layers.length * nzPL;
+  const jBase = nBaseLayers * nzPL;
   const dz = new Float64Array(Nz);
   const k = new Float64Array(Nz);
   const rho = new Float64Array(Nz);
@@ -343,6 +367,15 @@ export function initSim(params: SimParams): SimState {
   // ---- Field & view ----------------------------------------------------
   const T2D = new Float64Array(Nr * Nz);
   T2D.fill(initialTemp);
+  // Void cells (rim region of the base-plate stem) sit outside the pan and
+  // are decoupled from the active mesh — initialise to ambient so they read
+  // cleanly in any visualisation that happens to sample them.
+  if (jBase > 0) {
+    for (let j = 0; j < jBase; j++) {
+      const off = j * Nr;
+      for (let i = nInner; i < Nr; i++) T2D[off + i] = params.ambient;
+    }
+  }
   const T = T2D.subarray((Nz - 1) * Nr, Nz * Nr); // top surface — live view
 
   const qDensity = totalHeatedArea > 0 ? heaterPower / totalHeatedArea : 0;
@@ -418,6 +451,7 @@ export function initSim(params: SimParams): SimState {
     heatedArea,
     nInner,
     isExt,
+    jBase,
     k,
     rho,
     cp,
@@ -466,6 +500,8 @@ export function initSim(params: SimParams): SimState {
     TnTopBuf: new Float64Array(Nr),
     hBotBuf: new Float64Array(Nr),
     TnBotBuf: new Float64Array(Nr),
+    hStemSideBuf: new Float64Array(Nz),
+    TnStemSideBuf: new Float64Array(Nz),
     tdSub: new Float64Array(tdMax),
     tdDiag: new Float64Array(tdMax),
     tdSup: new Float64Array(tdMax),
@@ -517,6 +553,7 @@ export function step(state: SimState, substeps = 1) {
     heatedArea,
     nInner,
     isExt,
+    jBase,
     k,
     rho,
     cp,
@@ -529,6 +566,8 @@ export function step(state: SimState, substeps = 1) {
     TnTopBuf,
     hBotBuf,
     TnBotBuf,
+    hStemSideBuf,
+    TnStemSideBuf,
     tdSub,
     tdDiag,
     tdSup,
@@ -613,23 +652,63 @@ export function step(state: SimState, substeps = 1) {
     }
 
     // Linearise top-face radiation at T_n and snapshot T_n at the top row.
-    for (let i = 0; i < Nr; i++) {
-      const Tn = T2D[topRowOff + i];
-      const hRad = epsTop * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
-      hTopBuf[i] = (hConv + hRad) * ringArea[i]; // W/K
-      TnTopBuf[i] = Tn;
-    }
-    // Same treatment for the bottom face of rim cells (j=0). H = 0 for
-    // cooking-zone cells where the bottom is heater + adiabatic.
-    for (let i = 0; i < Nr; i++) {
-      const Tn = T2D[i]; // j=0 row
-      TnBotBuf[i] = Tn;
-      if (isExt[i]) {
-        const hRad = epsBot * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
-        hBotBuf[i] = (hConv + hRad) * ringArea[i];
-      } else {
-        hBotBuf[i] = 0;
+    // When the top row is itself part of the base-plate stem (jBase === Nz,
+    // i.e. every layer is base-plate), rim cells of the top row are void; we
+    // zero their Robin coefficient so they contribute nothing.
+    {
+      const topRowVoid = Nz - 1 < jBase; // only true when jBase === Nz
+      for (let i = 0; i < Nr; i++) {
+        if (topRowVoid && i >= nInner) {
+          hTopBuf[i] = 0;
+          TnTopBuf[i] = Tamb;
+          continue;
+        }
+        const Tn = T2D[topRowOff + i];
+        const hRad = epsTop * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
+        hTopBuf[i] = (hConv + hRad) * ringArea[i]; // W/K
+        TnTopBuf[i] = Tn;
       }
+    }
+    // Bottom face of rim cells in the wide slab: at j = jBase. When
+    // jBase === 0 this is the pan's actual bottom, matching the pre-base-plate
+    // behaviour. When jBase > 0 this is the underside of the wide slab where
+    // the stem narrows. H = 0 for cooking-zone cells (heater + adiabatic).
+    if (jBase < Nz) {
+      const botRowOff = jBase * Nr;
+      for (let i = 0; i < Nr; i++) {
+        const Tn = T2D[botRowOff + i];
+        TnBotBuf[i] = Tn;
+        if (isExt[i]) {
+          const hRad = epsBot * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
+          hBotBuf[i] = (hConv + hRad) * ringArea[i];
+        } else {
+          hBotBuf[i] = 0;
+        }
+      }
+    } else {
+      // No wide slab (every layer is a base-plate layer): no rim Robin.
+      hBotBuf.fill(0);
+      TnBotBuf.fill(Tamb);
+    }
+    // Stem outer-side air loss: radial face at r = panRadius for the stem
+    // cells at i = nInner − 1, j ∈ [0, jBase). Face area = 2π·panRadius·dz[j].
+    if (jBase > 0 && nInner > 0) {
+      const i_stem = nInner - 1;
+      const stemR = params.panRadius;
+      for (let j = 0; j < jBase; j++) {
+        const Tn = T2D[j * Nr + i_stem];
+        TnStemSideBuf[j] = Tn;
+        const hRad = epsBot * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
+        const A = TWO_PI * stemR * dz[j];
+        hStemSideBuf[j] = (hConv + hRad) * A;
+      }
+      for (let j = jBase; j < Nz; j++) {
+        hStemSideBuf[j] = 0;
+        TnStemSideBuf[j] = Tamb;
+      }
+    } else {
+      hStemSideBuf.fill(0);
+      TnStemSideBuf.fill(Tamb);
     }
 
     // ---- Half-step 1: implicit in r, explicit in z (one tridiag per row j) ----
@@ -643,24 +722,50 @@ export function step(state: SimState, substeps = 1) {
       const isTop = j === Nz - 1;
       const isBot = j === 0;
 
+      const rowVoid = j < jBase; // void cells in this row are at i ≥ nInner
       for (let i = 0; i < Nr; i++) {
+        // Void cell: Dirichlet T = Tamb. Decoupled from the active mesh so
+        // active cells at i = nInner − 1 must zero their right-face flux.
+        if (rowVoid && i >= nInner) {
+          tdSub[i] = 0;
+          tdSup[i] = 0;
+          tdDiag[i] = 1;
+          tdRhs[i] = Tamb;
+          continue;
+        }
         const idx = rowOff + i;
         const A = ringArea[i];
         const rhocV_dt2 = (rcDzj * A) / halfDt;
         const Gin = i > 0 ? (kj * TWO_PI * rLeft[i] * dzj) / drFace[i] : 0;
-        const Gout = i < Nr - 1 ? (kj * TWO_PI * rRight[i] * dzj) / drFace[i + 1] : 0;
+        // Right neighbour is void when (i+1 ≥ nInner) ∧ (j < jBase). For
+        // active cells in the stem this fires exactly at i = nInner − 1.
+        const rightVoid = i < Nr - 1 ? i + 1 >= nInner && rowVoid : false;
+        const Gout =
+          i < Nr - 1 && !rightVoid ? (kj * TWO_PI * rRight[i] * dzj) / drFace[i + 1] : 0;
 
         tdSub[i] = -Gin;
         tdSup[i] = -Gout;
-        tdDiag[i] = rhocV_dt2 + Gin + Gout;
+        let diag = rhocV_dt2 + Gin + Gout;
+        // Stem outer-side Robin at the stem-right cell: r = panRadius face.
+        const stemRight = i === nInner - 1 && rowVoid;
+        if (stemRight) diag += hStemSideBuf[j];
+        tdDiag[i] = diag;
 
         // RHS = ρcV/(dt/2)·T_n + (L_z T_n) + S
         let rhs = rhocV_dt2 * T2D[idx];
         if (j > 0) {
-          const Gbot = A / RbotR;
-          rhs += Gbot * (T2D[idx - Nr] - T2D[idx]);
+          // Bottom neighbour is void when (i ≥ nInner) ∧ (j − 1 < jBase),
+          // i.e. at the underside of the wide slab where it meets the void.
+          const bottomVoid = i >= nInner && j - 1 < jBase;
+          if (!bottomVoid) {
+            const Gbot = A / RbotR;
+            rhs += Gbot * (T2D[idx - Nr] - T2D[idx]);
+          }
         }
         if (j < Nz - 1) {
+          // Top neighbour is always active for an active cell:
+          //   - i < nInner → top neighbour also has i < nInner (active).
+          //   - i ≥ nInner & j ≥ jBase → top neighbour has j+1 > jBase (active).
           const Gtop = A / RtopR;
           rhs += Gtop * (T2D[idx + Nr] - T2D[idx]);
         }
@@ -682,13 +787,15 @@ export function step(state: SimState, substeps = 1) {
           if (heaterOn && heatedArea[i] > 0) {
             rhs += qDensity * heatedArea[i];
           }
-          // Bottom-face air loss in the rim zone (cooking-zone bottom is
-          // either heater or adiabatic, hBotBuf is 0 there).
-          if (hBotBuf[i] > 0) {
-            rhs -= hBotBuf[i] * T2D[idx];
-            rhs += hBotBuf[i] * Tamb;
-          }
         }
+        // Wide-slab underside Robin for rim cells: applied at j = jBase
+        // (cooking-zone cells have hBotBuf[i] = 0). When jBase = 0 this
+        // collapses to the pre-base-plate behaviour at j = 0.
+        if (j === jBase && hBotBuf[i] > 0) {
+          rhs -= hBotBuf[i] * T2D[idx];
+          rhs += hBotBuf[i] * Tamb;
+        }
+        if (stemRight) rhs += hStemSideBuf[j] * Tamb;
         tdRhs[i] = rhs;
       }
       solveTridiag(tdSub, tdDiag, tdSup, tdRhs, tdSol, tdCprime, Nr);
@@ -700,13 +807,26 @@ export function step(state: SimState, substeps = 1) {
     // ---- Half-step 2: implicit in z, explicit in r (one tridiag per column i) ----
     for (let i = 0; i < Nr; i++) {
       const A = ringArea[i];
+      // Rim columns (i ≥ nInner) have void cells at j < jBase.
+      const colHasVoid = i >= nInner && jBase > 0;
+      const isStemColumn = i === nInner - 1 && jBase > 0;
       for (let j = 0; j < Nz; j++) {
+        if (colHasVoid && j < jBase) {
+          tdSub[j] = 0;
+          tdSup[j] = 0;
+          tdDiag[j] = 1;
+          tdRhs[j] = Tamb;
+          continue;
+        }
         const idx = j * Nr + i;
         const dzj = dz[j];
         const kj = k[j];
         const rcDzj = rho[j] * cp[j] * dzj;
         const rhocV_dt2 = (rcDzj * A) / halfDt;
-        const Gbot = j > 0 ? A / axialFaceR[j - 1] : 0;
+        // Bottom-face conductance: zero when the bottom neighbour is void
+        // (rim cells at j = jBase when jBase > 0).
+        const bottomVoid = colHasVoid && j === jBase;
+        const Gbot = j > 0 && !bottomVoid ? A / axialFaceR[j - 1] : 0;
         const Gtop = j < Nz - 1 ? A / axialFaceR[j] : 0;
         const isTop = j === Nz - 1;
         const isBot = j === 0;
@@ -716,19 +836,25 @@ export function step(state: SimState, substeps = 1) {
         tdSup[j] = -Gtop;
         let diag = rhocV_dt2 + Gbot + Gtop;
         if (isTop && !useContact) diag += hTopBuf[i];
-        // Bottom Robin (rim cells only): on the diagonal in the implicit-z half.
-        if (isBot && hBotBuf[i] > 0) diag += hBotBuf[i];
+        // Wide-slab underside Robin (rim cells, j = jBase): on the diagonal.
+        if (j === jBase && hBotBuf[i] > 0) diag += hBotBuf[i];
         tdDiag[j] = diag;
 
         // RHS = ρcV/(dt/2)·T* + (L_r T*) + S
         let rhs = rhocV_dt2 * Tstar[idx];
         if (i > 0) {
+          // Left neighbour is always active for an active cell (the stem
+          // includes i = 0 .. nInner − 1 which are all cooking-zone cells).
           const Gin = (kj * TWO_PI * rLeft[i] * dzj) / drFace[i];
           rhs += Gin * (Tstar[idx - 1] - Tstar[idx]);
         }
         if (i < Nr - 1) {
-          const Gout = (kj * TWO_PI * rRight[i] * dzj) / drFace[i + 1];
-          rhs += Gout * (Tstar[idx + 1] - Tstar[idx]);
+          // Right neighbour void at the stem-right column for j < jBase.
+          const rightVoid = isStemColumn && j < jBase;
+          if (!rightVoid) {
+            const Gout = (kj * TWO_PI * rRight[i] * dzj) / drFace[i + 1];
+            rhs += Gout * (Tstar[idx + 1] - Tstar[idx]);
+          }
         }
         if (isTop) {
           if (useContact) {
@@ -740,7 +866,12 @@ export function step(state: SimState, substeps = 1) {
         }
         if (isBot) {
           if (heaterOn && heatedArea[i] > 0) rhs += qDensity * heatedArea[i];
-          if (hBotBuf[i] > 0) rhs += hBotBuf[i] * Tamb;
+        }
+        if (j === jBase && hBotBuf[i] > 0) rhs += hBotBuf[i] * Tamb;
+        // Stem outer-side Robin (radial face): explicit-r in this half.
+        if (isStemColumn && j < jBase) {
+          rhs -= hStemSideBuf[j] * Tstar[idx];
+          rhs += hStemSideBuf[j] * Tamb;
         }
 
         tdRhs[j] = rhs;
@@ -880,10 +1011,13 @@ export function step(state: SimState, substeps = 1) {
     }
 
     // ---- Energy tally (trapezoidal — exact for the applied flux) ----
-    // Top face loss for pan cells NOT covered by the steak.
+    // Top face loss for pan cells NOT covered by the steak. When the top row
+    // is itself a base-plate row (jBase === Nz), rim cells are void and have
+    // hTopBuf = 0 so they contribute nothing — skip them explicitly anyway.
     {
       const skip = state.steakActive ? steakNr : 0;
-      for (let i = skip; i < Nr; i++) {
+      const topMax = Nz - 1 < jBase ? nInner : Nr;
+      for (let i = skip; i < topMax; i++) {
         const Tn = TnTopBuf[i];
         const Tnp1 = T2D[topRowOff + i];
         const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
@@ -893,15 +1027,33 @@ export function step(state: SimState, substeps = 1) {
         eLossRad += hRad * dTavg * A * dt;
       }
     }
-    // Bottom face loss for rim cells only.
-    for (let i = nInner; i < Nr; i++) {
-      const Tn = TnBotBuf[i];
-      const Tnp1 = T2D[i]; // j=0 row
-      const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
-      const A = ringArea[i];
-      const hRad = (hBotBuf[i] - hConv * A) / A;
-      eLossConv += hConv * dTavg * A * dt;
-      eLossRad += hRad * dTavg * A * dt;
+    // Bottom face loss for rim cells only — at the underside of the wide
+    // slab (row j = jBase). When jBase === Nz there is no wide slab, skip.
+    if (jBase < Nz) {
+      const botRowOff = jBase * Nr;
+      for (let i = nInner; i < Nr; i++) {
+        const Tn = TnBotBuf[i];
+        const Tnp1 = T2D[botRowOff + i];
+        const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
+        const A = ringArea[i];
+        const hRad = (hBotBuf[i] - hConv * A) / A;
+        eLossConv += hConv * dTavg * A * dt;
+        eLossRad += hRad * dTavg * A * dt;
+      }
+    }
+    // Stem outer-side loss: radial face at r = panRadius for j ∈ [0, jBase).
+    if (jBase > 0 && nInner > 0) {
+      const i_stem = nInner - 1;
+      const stemR = params.panRadius;
+      for (let j = 0; j < jBase; j++) {
+        const Tn = TnStemSideBuf[j];
+        const Tnp1 = T2D[j * Nr + i_stem];
+        const dTavg = 0.5 * (Tn + Tnp1) - Tamb;
+        const A = TWO_PI * stemR * dz[j];
+        const hRad = (hStemSideBuf[j] - hConv * A) / A;
+        eLossConv += hConv * dTavg * A * dt;
+        eLossRad += hRad * dTavg * A * dt;
+      }
     }
     // Steak air-loss tally (top + outer side faces).
     if (state.steakActive && steakNr > 0 && steakNz > 0) {
@@ -976,7 +1128,9 @@ export function step(state: SimState, substeps = 1) {
     const rcDz = rho[j] * cp[j] * dz[j];
     const rowOff = j * Nr;
     let rowSum = 0;
-    for (let i = 0; i < Nr; i++) {
+    // Void cells (rim region of base-plate stem) are excluded from eStored.
+    const iMax = j < jBase ? nInner : Nr;
+    for (let i = 0; i < iMax; i++) {
       rowSum += ringArea[i] * (T2D[rowOff + i] - T0pan);
     }
     eStored += rcDz * rowSum;
