@@ -17,6 +17,10 @@ interface Props {
   // tEnd defaults to "the latest sample time within the window".
   tStart?: number;
   tEnd?: number;
+  // User-pinned time (rendered as a dashed vertical marker). null = no pin.
+  pinnedTime?: number | null;
+  // Called when the user clicks the chart at a resolvable sample time.
+  onPickTime?: (t: number) => void;
 }
 
 const COL = {
@@ -29,6 +33,7 @@ const COL = {
   ready: "rgba(110, 220, 180, 0.7)", // teal — pan ready to cook
   steady: "rgba(160, 220, 110, 0.7)", // lime — steady state
   flipped: "rgba(190, 150, 230, 0.75)", // purple — steak flipped
+  pinned: "rgba(255, 255, 255, 0.85)", // white — user-pinned time
 };
 
 interface HoverData {
@@ -50,6 +55,8 @@ export function TempHistoryChart({
   yRangeCOverride,
   tStart,
   tEnd,
+  pinnedTime,
+  onPickTime,
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const hoverRef = useRef<HoverData | null>(null);
@@ -155,6 +162,16 @@ export function TempHistoryChart({
     if (tSteady != null && inWindow(tSteady)) {
       drawVMarker(ctx, xOf(tSteady), yPlotTop, yPlotBot, COL.steady, `Steady ${formatSimTime(tSteady)}`);
     }
+    if (pinnedTime != null && inWindow(pinnedTime)) {
+      drawVMarker(
+        ctx,
+        xOf(pinnedTime),
+        yPlotTop,
+        yPlotBot,
+        COL.pinned,
+        `Pin ${formatSimTime(pinnedTime)}`,
+      );
+    }
 
     if (hist.length >= 2) {
       // Draw order matters: T_edge can coincide with T_center when the heater
@@ -188,6 +205,7 @@ export function TempHistoryChart({
     yRangeCOverride?.max,
     tStart,
     tEnd,
+    pinnedTime,
   ]);
 
   return (
@@ -227,6 +245,17 @@ export function TempHistoryChart({
             ),
           };
         }}
+        onClick={
+          onPickTime
+            ? (px) => {
+                const d = hoverRef.current;
+                if (!d || d.hist.length < 2) return;
+                const { x0, x1 } = d.plotArea;
+                const t = d.t0 + ((px - x0) / (x1 - x0)) * (d.tHi - d.t0);
+                onPickTime(t);
+              }
+            : undefined
+        }
       />
     </div>
   );

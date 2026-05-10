@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -12,7 +13,7 @@ import { TempHistoryChart } from "./TempHistoryChart";
 import { type SimState } from "@/lib/simulation";
 import { type PanConfig, type HeaterConfig } from "@/lib/configs";
 import { formatSimTime } from "@/lib/format";
-import { Pause, Play, RotateCcw, X } from "lucide-react";
+import { Pause, Play, Pin, RotateCcw, X } from "lucide-react";
 
 interface Props {
   pans: PanConfig[];
@@ -57,6 +58,30 @@ export function SimCard({
   const pan = pans.find((p) => p.id === panId);
   const heater = heaters.find((h) => h.id === heaterId);
 
+  // Click-to-pin support. The worker only ships HistorySample summary stats,
+  // so we keep our own ring of (time, top-row T) snapshots captured from
+  // incoming `state` updates and look up the nearest one when the user
+  // clicks the time-history chart.
+  const ttopHistoryRef = useRef<{ t: number; Ttop: Float64Array }[]>([]);
+  const [pinned, setPinned] = useState<{ t: number; Ttop: Float64Array } | null>(null);
+  useEffect(() => {
+    if (!state) return;
+    const t = state.time;
+    const buf = ttopHistoryRef.current;
+    // Detect a sim reset (time went backwards or to 0) and clear the buffer
+    // + any active pin.
+    if (buf.length > 0 && t < buf[buf.length - 1].t) {
+      ttopHistoryRef.current = [];
+      setPinned(null);
+    }
+    // Append the snapshot if time advanced.
+    if (buf.length === 0 || t > buf[buf.length - 1].t) {
+      // Hard cap on memory: ~2000 entries × Nr × 8 bytes.
+      if (buf.length >= 2000) buf.shift();
+      buf.push({ t, Ttop: state.T.slice() });
+    }
+  }, [state, state?.time]);
+
   if (!pan || !heater) {
     return (
       <section className="panel p-5 text-sm text-muted-foreground min-w-[340px] flex-1">
@@ -65,7 +90,22 @@ export function SimCard({
     );
   }
 
-  const Tarr = state?.T ?? new Float64Array([initialTempK]);
+  const handlePickTime = (t: number) => {
+    const buf = ttopHistoryRef.current;
+    if (buf.length === 0) return;
+    let lo = 0;
+    let hi = buf.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (buf[mid].t < t) lo = mid + 1;
+      else hi = mid;
+    }
+    let idx = lo;
+    if (lo > 0 && Math.abs(buf[lo - 1].t - t) < Math.abs(buf[lo].t - t)) idx = lo - 1;
+    setPinned({ t: buf[idx].t, Ttop: buf[idx].Ttop });
+  };
+
+  const Tarr = pinned?.Ttop ?? state?.T ?? new Float64Array([initialTempK]);
   const Rarr = state?.r ?? new Float64Array([0]);
   let tMinK = initialTempK;
   let tMaxK = tMinK + 1;
@@ -111,6 +151,12 @@ export function SimCard({
       T: state.tempProfileCooked,
       color: "rgba(230, 130, 110, 0.8)",
       label: "Cooked",
+    });
+  if (pinned)
+    profileExtras.push({
+      T: pinned.Ttop,
+      color: "rgba(255, 255, 255, 0.85)",
+      label: `Pin @ ${formatSimTime(pinned.t)}`,
     });
 
   return (
@@ -190,7 +236,24 @@ export function SimCard({
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">
             t = <span className="font-mono text-primary">{formatSimTime(state?.time ?? 0)}</span>
+            {pinned && (
+              <span className="ml-3 text-muted-foreground">
+                pinned @{" "}
+                <span className="font-mono text-foreground">{formatSimTime(pinned.t)}</span>
+              </span>
+            )}
           </span>
+          {pinned && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-xs"
+              onClick={() => setPinned(null)}
+              title="Clear the pinned snapshot"
+            >
+              <Pin className="w-3 h-3 mr-1" /> Unpin
+            </Button>
+          )}
         </div>
         <ProgressIndicators state={state} />
       </div>
@@ -209,7 +272,7 @@ export function SimCard({
             heaterThickness={heater.thickness}
             tMin={tMinK}
             tMax={tMaxK}
-            tick={state?.time}
+            tick={pinned?.t ?? state?.time}
             size={220}
           />
         </div>
@@ -222,7 +285,7 @@ export function SimCard({
             tMax={tMaxK}
             rOuter={pan.diameter / 2 + pan.rimHeight}
             rCooking={pan.diameter / 2}
-            tick={state?.time}
+            tick={pinned?.t ?? state?.time}
             width={260}
             height={180}
             extras={profileExtras}
@@ -239,6 +302,8 @@ export function SimCard({
             yRangeCOverride={historyRangeCOverride}
             width={540}
             height={200}
+            pinnedTime={pinned?.t ?? null}
+            onPickTime={handlePickTime}
           />
         </div>
       </div>

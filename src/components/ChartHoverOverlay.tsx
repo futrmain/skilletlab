@@ -17,19 +17,21 @@ interface Props {
   // Called on every mousemove with cursor coords (CSS px relative to the
   // overlay div). Return null to hide the tooltip for this position.
   resolve: (px: number, py: number) => HoverInfo | null;
+  // Optional click handler — invoked when the user clicks somewhere that
+  // resolves to a HoverInfo. Receives the same cursor coords.
+  onClick?: (px: number, py: number) => void;
 }
 
 // Transparent overlay that renders a hairline + dot + tooltip on top of a
 // canvas chart. The chart owns its rendering and exposes a `resolve` function
 // that maps cursor pixels to a HoverInfo (or null when outside the plot area).
-export function ChartHoverOverlay({ width, height, resolve }: Props) {
+export function ChartHoverOverlay({ width, height, resolve, onClick }: Props) {
   const [info, setInfo] = useState<HoverInfo | null>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number } | null>(null);
 
   return (
     <div
       className="absolute inset-0"
-      style={{ width, height }}
       onMouseMove={(e) => {
         const rect = e.currentTarget.getBoundingClientRect();
         const px = e.clientX - rect.left;
@@ -47,6 +49,17 @@ export function ChartHoverOverlay({ width, height, resolve }: Props) {
         setInfo(null);
         setCursor(null);
       }}
+      onClick={
+        onClick
+          ? (e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              const px = e.clientX - rect.left;
+              const py = e.clientY - rect.top;
+              if (resolve(px, py)) onClick(px, py);
+            }
+          : undefined
+      }
+      style={{ ...{ width, height }, cursor: onClick ? "crosshair" : undefined }}
     >
       {info && cursor && (
         <>
