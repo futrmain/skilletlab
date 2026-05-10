@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { type SimState } from "@/lib/simulation";
+import { type SimState, type HistorySample } from "@/lib/simulation";
+import { ChartHoverOverlay } from "./ChartHoverOverlay";
 
 interface Props {
   state: SimState | null;
@@ -25,6 +26,15 @@ const COL = {
   searing: "rgba(255, 110, 90, 0.8)",
 };
 
+interface HoverData {
+  hist: HistorySample[];
+  xOf: (t: number) => number;
+  yOf: (Tc: number) => number;
+  plotArea: { x0: number; x1: number; y0: number; y1: number };
+  t0: number;
+  tHi: number;
+}
+
 export function TempHistoryChart({
   state,
   initialTempK,
@@ -37,6 +47,7 @@ export function TempHistoryChart({
   tEnd,
 }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const hoverRef = useRef<HoverData | null>(null);
 
   useEffect(() => {
     const c = ref.current;
@@ -59,7 +70,7 @@ export function TempHistoryChart({
     const t0 = tStart ?? 0;
     // Pick the samples that fall inside the window. Allow a tiny epsilon at
     // the boundaries so a sample landing exactly on tStart/tEnd is kept.
-    const hist: typeof histAll = [];
+    const hist: HistorySample[] = [];
     for (const s of histAll) {
       if (s.t < t0 - 1e-9) continue;
       if (tEnd !== undefined && s.t > tEnd + 1e-9) continue;
@@ -118,14 +129,23 @@ export function TempHistoryChart({
     drawMarker(ctx, pad.l, pad.l + w, yOf(maillardC), COL.maillard, `Maillard ${maillardC}°`);
     drawMarker(ctx, pad.l, pad.l + w, yOf(searingC), COL.searing, `Sear ${searingC}°`);
 
-    if (hist.length < 2) return;
+    if (hist.length >= 2) {
+      // Draw order matters: T_edge can coincide with T_center when the heater
+      // is a ring (until heat reaches both extremes). Paint T_edge last so its
+      // line stays visible in that case.
+      drawSeries(ctx, hist, xOf, yOf, (s) => s.Tmax - 273.15, COL.max);
+      drawSeries(ctx, hist, xOf, yOf, (s) => s.Tcenter - 273.15, COL.center);
+      drawSeries(ctx, hist, xOf, yOf, (s) => s.Tedge - 273.15, COL.min);
+    }
 
-    // Draw order matters: T_edge can coincide with T_center when the heater
-    // is a ring (until heat reaches both extremes). Paint T_edge last so its
-    // line stays visible in that case.
-    drawSeries(ctx, hist, xOf, yOf, (s) => s.Tmax - 273.15, COL.max);
-    drawSeries(ctx, hist, xOf, yOf, (s) => s.Tcenter - 273.15, COL.center);
-    drawSeries(ctx, hist, xOf, yOf, (s) => s.Tedge - 273.15, COL.min);
+    hoverRef.current = {
+      hist,
+      xOf,
+      yOf,
+      plotArea: { x0: pad.l, x1: pad.l + w, y0: pad.t, y1: pad.t + h },
+      t0,
+      tHi,
+    };
     // history.length is the per-tick signal that retriggers this effect; the
     // SimState reference itself is stable across renders so we can't depend on
     // it directly.
@@ -143,7 +163,46 @@ export function TempHistoryChart({
     tEnd,
   ]);
 
-  return <canvas ref={ref} />;
+  return (
+    <div className="relative inline-block" style={{ width, height }}>
+      <canvas ref={ref} />
+      <ChartHoverOverlay
+        width={width}
+        height={height}
+        resolve={(px, py) => {
+          const d = hoverRef.current;
+          if (!d || d.hist.length < 2) return null;
+          const { x0, x1, y0, y1 } = d.plotArea;
+          if (px < x0 || px > x1 || py < y0 || py > y1) return null;
+          const t = d.t0 + ((px - x0) / (x1 - x0)) * (d.tHi - d.t0);
+          let lo = 0;
+          let hi = d.hist.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (d.hist[mid].t < t) lo = mid + 1;
+            else hi = mid;
+          }
+          let idx = lo;
+          if (lo > 0 && Math.abs(d.hist[lo - 1].t - t) < Math.abs(d.hist[lo].t - t)) idx = lo - 1;
+          const s = d.hist[idx];
+          return {
+            x: d.xOf(s.t),
+            y: d.yOf(s.Tcenter - 273.15),
+            content: (
+              <div className="space-y-0.5">
+                <div className="text-muted-foreground">t = {s.t.toFixed(1)} s</div>
+                <div style={{ color: COL.center }}>
+                  center = {(s.Tcenter - 273.15).toFixed(1)}°C
+                </div>
+                <div style={{ color: COL.max }}>max = {(s.Tmax - 273.15).toFixed(1)}°C</div>
+                <div style={{ color: COL.min }}>edge = {(s.Tedge - 273.15).toFixed(1)}°C</div>
+              </div>
+            ),
+          };
+        }}
+      />
+    </div>
+  );
 }
 
 function drawMarker(
@@ -169,10 +228,10 @@ function drawMarker(
 
 function drawSeries(
   ctx: CanvasRenderingContext2D,
-  hist: { t: number; Tcenter: number; Tmax: number; Tedge: number }[],
+  hist: HistorySample[],
   xOf: (t: number) => number,
   yOf: (Tc: number) => number,
-  pick: (s: { t: number; Tcenter: number; Tmax: number; Tedge: number }) => number,
+  pick: (s: HistorySample) => number,
   color: string,
 ) {
   ctx.strokeStyle = color;

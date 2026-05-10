@@ -10,6 +10,7 @@ import {
 import { type SimState } from "@/lib/simulation";
 import { type PanConfig, type HeaterConfig } from "@/lib/configs";
 import { X } from "lucide-react";
+import { ChartHoverOverlay } from "./ChartHoverOverlay";
 
 interface Props {
   pans: PanConfig[];
@@ -173,6 +174,15 @@ function Swatch({ color, label }: { color: string; label: string }) {
   );
 }
 
+type PowerPoint = { t: number; eIn: number; eStored: number; eConv: number; eRad: number };
+interface EnergyHover {
+  power: PowerPoint[];
+  xOf: (t: number) => number;
+  yOf: (e: number) => number;
+  plotArea: { x0: number; x1: number; y0: number; y1: number };
+  tMax: number;
+}
+
 function EnergyChart({
   state,
   width,
@@ -183,6 +193,7 @@ function EnergyChart({
   height: number;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const hoverRef = useRef<EnergyHover | null>(null);
 
   useEffect(() => {
     const c = ref.current;
@@ -204,11 +215,11 @@ function EnergyChart({
     const hist = state?.history ?? [];
     if (hist.length < 2) {
       drawAxes(ctx, pad, w, h, "0", "0", "0 s", "0 s");
+      hoverRef.current = null;
       return;
     }
 
     // Power = dE/dt via discrete differences between consecutive samples.
-    type PowerPoint = { t: number; eIn: number; eStored: number; eConv: number; eRad: number };
     const power: PowerPoint[] = [];
     for (let i = 1; i < hist.length; i++) {
       const dtSample = hist[i].t - hist[i - 1].t;
@@ -223,6 +234,7 @@ function EnergyChart({
     }
     if (power.length < 2) {
       drawAxes(ctx, pad, w, h, "0", "0", "0 s", "0 s");
+      hoverRef.current = null;
       return;
     }
 
@@ -245,9 +257,65 @@ function EnergyChart({
     drawLine(ctx, power, xOf, yOf, (s) => s.eStored, COL.stored);
     drawLine(ctx, power, xOf, yOf, (s) => s.eConv, COL.conv);
     drawLine(ctx, power, xOf, yOf, (s) => s.eRad, COL.rad);
+
+    hoverRef.current = {
+      power,
+      xOf,
+      yOf,
+      plotArea: { x0: pad.l, x1: pad.l + w, y0: pad.t, y1: pad.t + h },
+      tMax,
+    };
   }, [state, state?.history.length, width, height]);
 
-  return <canvas ref={ref} />;
+  return (
+    <div className="relative inline-block" style={{ width, height }}>
+      <canvas ref={ref} />
+      <ChartHoverOverlay
+        width={width}
+        height={height}
+        resolve={(px, py) => {
+          const d = hoverRef.current;
+          if (!d || d.power.length < 2) return null;
+          const { x0, x1, y0, y1 } = d.plotArea;
+          if (px < x0 || px > x1 || py < y0 || py > y1) return null;
+          const t = ((px - x0) / (x1 - x0)) * d.tMax;
+          let lo = 0;
+          let hi = d.power.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (d.power[mid].t < t) lo = mid + 1;
+            else hi = mid;
+          }
+          let idx = lo;
+          if (lo > 0 && Math.abs(d.power[lo - 1].t - t) < Math.abs(d.power[lo].t - t)) idx = lo - 1;
+          const s = d.power[idx];
+          const fmt = (v: number) =>
+            Math.abs(v) >= 100 ? `${(v / 1000).toFixed(2)} kW` : `${v.toFixed(0)} W`;
+          return {
+            x: d.xOf(s.t),
+            y: d.yOf(s.eIn),
+            content: (
+              <div className="space-y-0.5">
+                <div className="text-muted-foreground">t = {s.t.toFixed(1)} s</div>
+                <div style={{ color: COL.input }}>input = {fmt(s.eIn)}</div>
+                <div style={{ color: COL.stored }}>stored = {fmt(s.eStored)}</div>
+                <div style={{ color: COL.conv }}>conv = {fmt(s.eConv)}</div>
+                <div style={{ color: COL.rad }}>rad = {fmt(s.eRad)}</div>
+              </div>
+            ),
+          };
+        }}
+      />
+    </div>
+  );
+}
+
+interface ResidualHover {
+  points: { t: number; lr: number }[];
+  xOf: (t: number) => number;
+  yOf: (lr: number) => number;
+  plotArea: { x0: number; x1: number; y0: number; y1: number };
+  tMax: number;
 }
 
 function ResidualChart({
@@ -260,6 +328,7 @@ function ResidualChart({
   height: number;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const hoverRef = useRef<ResidualHover | null>(null);
 
   useEffect(() => {
     const c = ref.current;
@@ -281,6 +350,7 @@ function ResidualChart({
     const hist = state?.history ?? [];
     if (hist.length < 2) {
       drawAxes(ctx, pad, w, h, "—", "—", "0 s", "0 s");
+      hoverRef.current = null;
       return;
     }
 
@@ -300,6 +370,7 @@ function ResidualChart({
     }
     if (!Number.isFinite(logMin) || !Number.isFinite(logMax)) {
       drawAxes(ctx, pad, w, h, "—", "—", `${tMax.toFixed(1)} s`, "0 s");
+      hoverRef.current = null;
       return;
     }
     if (logMax - logMin < 1) {
@@ -347,9 +418,65 @@ function ResidualChart({
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
+
+    hoverRef.current = {
+      points,
+      xOf,
+      yOf,
+      plotArea: { x0: pad.l, x1: pad.l + w, y0: pad.t, y1: pad.t + h },
+      tMax,
+    };
   }, [state, state?.history.length, width, height]);
 
-  return <canvas ref={ref} />;
+  return (
+    <div className="relative inline-block" style={{ width, height }}>
+      <canvas ref={ref} />
+      <ChartHoverOverlay
+        width={width}
+        height={height}
+        resolve={(px, py) => {
+          const d = hoverRef.current;
+          if (!d || d.points.length < 2) return null;
+          const { x0, x1, y0, y1 } = d.plotArea;
+          if (px < x0 || px > x1 || py < y0 || py > y1) return null;
+          const t = ((px - x0) / (x1 - x0)) * d.tMax;
+          let lo = 0;
+          let hi = d.points.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (d.points[mid].t < t) lo = mid + 1;
+            else hi = mid;
+          }
+          let idx = lo;
+          if (
+            lo > 0 &&
+            Math.abs(d.points[lo - 1].t - t) < Math.abs(d.points[lo].t - t)
+          )
+            idx = lo - 1;
+          const s = d.points[idx];
+          const r = Math.pow(10, s.lr);
+          return {
+            x: d.xOf(s.t),
+            y: d.yOf(s.lr),
+            content: (
+              <div className="space-y-0.5">
+                <div className="text-muted-foreground">t = {s.t.toFixed(1)} s</div>
+                <div style={{ color: "oklch(0.85 0.02 230)" }}>|residual| = {r.toExponential(2)} J</div>
+              </div>
+            ),
+          };
+        }}
+      />
+    </div>
+  );
+}
+
+interface MaxDeltaHover {
+  hist: { t: number; maxDeltaT: number }[];
+  xOf: (t: number) => number;
+  yOf: (v: number) => number;
+  plotArea: { x0: number; x1: number; y0: number; y1: number };
+  tMax: number;
 }
 
 function MaxDeltaTChart({
@@ -362,6 +489,7 @@ function MaxDeltaTChart({
   height: number;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const hoverRef = useRef<MaxDeltaHover | null>(null);
 
   useEffect(() => {
     const c = ref.current;
@@ -383,6 +511,7 @@ function MaxDeltaTChart({
     const hist = state?.history ?? [];
     if (hist.length < 2) {
       drawAxes(ctx, pad, w, h, "0", "0", "0 s", "0 s");
+      hoverRef.current = null;
       return;
     }
 
@@ -411,9 +540,54 @@ function MaxDeltaTChart({
       else ctx.lineTo(x, y);
     }
     ctx.stroke();
+
+    hoverRef.current = {
+      hist,
+      xOf,
+      yOf,
+      plotArea: { x0: pad.l, x1: pad.l + w, y0: pad.t, y1: pad.t + h },
+      tMax,
+    };
   }, [state, state?.history.length, width, height]);
 
-  return <canvas ref={ref} />;
+  return (
+    <div className="relative inline-block" style={{ width, height }}>
+      <canvas ref={ref} />
+      <ChartHoverOverlay
+        width={width}
+        height={height}
+        resolve={(px, py) => {
+          const d = hoverRef.current;
+          if (!d || d.hist.length < 2) return null;
+          const { x0, x1, y0, y1 } = d.plotArea;
+          if (px < x0 || px > x1 || py < y0 || py > y1) return null;
+          const t = ((px - x0) / (x1 - x0)) * d.tMax;
+          let lo = 0;
+          let hi = d.hist.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (d.hist[mid].t < t) lo = mid + 1;
+            else hi = mid;
+          }
+          let idx = lo;
+          if (lo > 0 && Math.abs(d.hist[lo - 1].t - t) < Math.abs(d.hist[lo].t - t)) idx = lo - 1;
+          const s = d.hist[idx];
+          return {
+            x: d.xOf(s.t),
+            y: d.yOf(s.maxDeltaT),
+            content: (
+              <div className="space-y-0.5">
+                <div className="text-muted-foreground">t = {s.t.toFixed(1)} s</div>
+                <div style={{ color: "oklch(0.78 0.18 75)" }}>
+                  max |ΔT| = {s.maxDeltaT.toFixed(2)} K
+                </div>
+              </div>
+            ),
+          };
+        }}
+      />
+    </div>
+  );
 }
 
 function drawHRule(

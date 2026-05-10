@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { type SimState } from "@/lib/simulation";
+import { ChartHoverOverlay } from "./ChartHoverOverlay";
 
 export interface CompareEntry {
   key: string;
@@ -576,6 +577,14 @@ interface MProfileProps {
 
 // Overlaid radial profile for a single milestone — one line per pan, drawn
 // only for pans whose snapshot exists. Identical look to CompareProfileChart.
+interface MProfileHover {
+  series: { label: string; color: string; T: Float64Array; r: Float64Array }[];
+  rMax: number;
+  tMin: number;
+  tMax: number;
+  plotArea: { x0: number; x1: number; y0: number; y1: number };
+}
+
 export function CompareMilestoneProfileChart({
   entries,
   picker,
@@ -583,6 +592,7 @@ export function CompareMilestoneProfileChart({
   height = 280,
 }: MProfileProps) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const hoverRef = useRef<MProfileHover | null>(null);
   useEffect(() => {
     const c = ref.current;
     if (!c) return;
@@ -621,6 +631,7 @@ export function CompareMilestoneProfileChart({
       ctx.textAlign = "center";
       ctx.fillText("Not yet captured", pad.l + w / 2, pad.t + h / 2);
       ctx.textAlign = "left";
+      hoverRef.current = null;
       return;
     }
     if (!Number.isFinite(tMin)) tMin = 293.15;
@@ -647,6 +658,7 @@ export function CompareMilestoneProfileChart({
     ctx.fillStyle = "rgba(180,180,180,0.7)";
     ctx.fillText("radius →", pad.l + w - 60, pad.t - 4);
 
+    const series: MProfileHover["series"] = [];
     for (const e of entries) {
       const st = e.state;
       const T = st ? picker(st) : null;
@@ -663,9 +675,70 @@ export function CompareMilestoneProfileChart({
         else ctx.lineTo(x, y);
       }
       ctx.stroke();
+      series.push({ label: e.label, color: e.color, T, r: R });
     }
+    hoverRef.current = {
+      series,
+      rMax,
+      tMin,
+      tMax,
+      plotArea: { x0: pad.l, x1: pad.l + w, y0: pad.t, y1: pad.t + h },
+    };
   }, [entries, picker, width, height]);
-  return <canvas ref={ref} />;
+  return (
+    <div className="relative inline-block" style={{ width, height }}>
+      <canvas ref={ref} />
+      <ChartHoverOverlay
+        width={width}
+        height={height}
+        resolve={(px, py) => {
+          const d = hoverRef.current;
+          if (!d || d.series.length === 0) return null;
+          const { x0, x1, y0, y1 } = d.plotArea;
+          if (px < x0 || px > x1 || py < y0 || py > y1) return null;
+          const rTarget = ((px - x0) / (x1 - x0)) * d.rMax;
+          // Per-entry: nearest cell to rTarget. The cursor x is anchored to
+          // the first entry; the dot sits on its profile, the tooltip lists
+          // every entry's T at that radius.
+          const rows: { label: string; color: string; T: number; rcell: number }[] = [];
+          let dotY: number | undefined;
+          for (let s = 0; s < d.series.length; s++) {
+            const { label, color, T, r } = d.series[s];
+            if (r.length === 0) continue;
+            let lo = 0;
+            let hi = r.length - 1;
+            while (lo < hi) {
+              const mid = (lo + hi) >> 1;
+              if (r[mid] < rTarget) lo = mid + 1;
+              else hi = mid;
+            }
+            let idx = lo;
+            if (lo > 0 && Math.abs(r[lo - 1] - rTarget) < Math.abs(r[lo] - rTarget)) idx = lo - 1;
+            rows.push({ label, color, T: T[idx], rcell: r[idx] });
+            if (s === 0) {
+              const norm = (T[idx] - d.tMin) / Math.max(1e-6, d.tMax - d.tMin);
+              dotY = y0 + (y1 - y0) * (1 - norm);
+            }
+          }
+          if (rows.length === 0) return null;
+          return {
+            x: px,
+            y: dotY,
+            content: (
+              <div className="space-y-0.5">
+                <div className="text-muted-foreground">r ≈ {(rTarget * 100).toFixed(2)} cm</div>
+                {rows.map((row, i) => (
+                  <div key={i} style={{ color: row.color }}>
+                    {row.label} = {(row.T - 273.15).toFixed(1)}°C
+                  </div>
+                ))}
+              </div>
+            ),
+          };
+        }}
+      />
+    </div>
+  );
 }
 
 interface MTimeBarProps {

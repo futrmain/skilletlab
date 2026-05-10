@@ -1,5 +1,17 @@
 import { useEffect, useRef } from "react";
 import { thermalColorRGBA } from "@/lib/colormap";
+import { ChartHoverOverlay } from "./ChartHoverOverlay";
+
+interface PanViewHover {
+  T: Float64Array;
+  r: Float64Array;
+  cx: number;
+  cy: number;
+  radiusPx: number;
+  panRadius: number;
+  // Heatmap occupies x in [0, heatmapW] of the wrapping div.
+  heatmapW: number;
+}
 
 interface Props {
   T: Float64Array;
@@ -29,6 +41,7 @@ export function PanView({
   tick,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const hoverRef = useRef<PanViewHover | null>(null);
 
   // Internal: total canvas width = heatmap diameter (`size`) + colorbar strip.
   const colorbarStripW = 44;
@@ -163,14 +176,56 @@ export function PanView({
     ctx.fillText(`${tMinC.toFixed(0)}°`, labelX, stripY + stripH - 4);
     // Reset baseline so we don't surprise other ctx state outside this effect.
     ctx.textBaseline = "alphabetic";
+
+    hoverRef.current = { T, r, cx, cy, radiusPx, panRadius, heatmapW };
   }, [T, r, panRadius, cookingRadius, heaterRadius, heaterThickness, tMin, tMax, tick, size]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={canvasW}
-      height={canvasH}
-      style={{ width: canvasW, height: canvasH, display: "block" }}
-    />
+    <div
+      className="relative inline-block"
+      style={{ width: canvasW, height: canvasH }}
+    >
+      <canvas
+        ref={canvasRef}
+        width={canvasW}
+        height={canvasH}
+        style={{ width: canvasW, height: canvasH, display: "block" }}
+      />
+      <ChartHoverOverlay
+        width={canvasW}
+        height={canvasH}
+        resolve={(px, py) => {
+          const d = hoverRef.current;
+          if (!d || d.T.length === 0) return null;
+          // Only respond over the heatmap region; ignore the colorbar strip.
+          if (px > d.heatmapW) return null;
+          const dx = px - d.cx;
+          const dy = py - d.cy;
+          const dPx = Math.sqrt(dx * dx + dy * dy);
+          if (dPx > d.radiusPx) return null;
+          const rPhys = (dPx / d.radiusPx) * d.panRadius;
+          // Nearest cell-center.
+          let lo = 0;
+          let hi = d.r.length - 1;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (d.r[mid] < rPhys) lo = mid + 1;
+            else hi = mid;
+          }
+          let idx = lo;
+          if (lo > 0 && Math.abs(d.r[lo - 1] - rPhys) < Math.abs(d.r[lo] - rPhys)) idx = lo - 1;
+          return {
+            x: px,
+            noHairline: true,
+            content: (
+              <div className="space-y-0.5">
+                <div className="text-muted-foreground">r ≈ {(rPhys * 100).toFixed(2)} cm</div>
+                <div style={{ color: "oklch(0.78 0.18 75)" }}>T = {(d.T[idx] - 273.15).toFixed(1)}°C</div>
+              </div>
+            ),
+          };
+        }}
+      />
+    </div>
   );
 }
