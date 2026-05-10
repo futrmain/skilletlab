@@ -373,10 +373,10 @@ function Index() {
               />
               <MilestoneSection
                 title="Steady state"
-                description="Top-surface temperatures captured at the simulation's final-steady moment (limit-cycle convergence with no steak, or 'cooked through' with a steak)."
+                description="Top-surface temperatures captured at the FIRST steady state — the moment the pan reaches its limit cycle and the steak is dropped (or limit-cycle convergence with no steak)."
                 entries={compareEntries}
                 snapshotPicker={(s) => s.tempProfileSteady}
-                timePicker={(s) => s.steadyAtTime}
+                timePicker={(s) => s.steakDroppedAt ?? s.steadyAtTime}
               />
               <MilestoneSection
                 title="Local minimum after steak drop"
@@ -404,7 +404,7 @@ function Index() {
                     <div className="label-tag">Time to steady (s)</div>
                     <CompareMilestoneTimeBars
                       entries={compareEntries}
-                      picker={(s) => s.steadyAtTime}
+                      picker={(s) => s.steakDroppedAt ?? s.steadyAtTime}
                       axisLabel="Time to steady (s)"
                       width={Math.max(360, compareEntries.length * 90 + 100)}
                       height={200}

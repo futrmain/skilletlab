@@ -160,7 +160,7 @@ export interface SimState {
   cookingReadyAtTime: number | null;
   // Top-row T snapshots captured at three milestones, used by the Compare tab.
   tempProfileReady: Float64Array | null; // captured when cookingReadyAtTime latches
-  tempProfileSteady: Float64Array | null; // captured when steadyAtTime latches
+  tempProfileSteady: Float64Array | null; // top-row T at first-steady (= steak drop, or limit-cycle convergence with no steak)
   tempProfileLocalMin: Float64Array | null; // captured at running-min T_center during steak phase
   localMinAfterSteakAtTime: number | null;
   localMinTcenter: number; // running min — Infinity until first sample during steak phase
@@ -1130,10 +1130,13 @@ export function step(state: SimState, substeps = 1) {
         if (relChange <= 0.02) {
           if (params.steakEnabled && !state.steakActive && steakNr > 0 && steakNz > 0) {
             // Phase A → Phase B: drop the steak and keep simulating. The
-            // final stopping criterion is now "cooked throughout".
+            // final stopping criterion is now "cooked throughout". Capture
+            // the "steady state" pan snapshot HERE — the first steady moment
+            // (just before the steak shocks the cooking surface).
             Tsteak.fill(params.steakInitialTemp);
             state.steakActive = true;
             state.steakDroppedAt = state.time;
+            state.tempProfileSteady = state.T.slice();
             state.lastWindowAvg = null;
             state.prevWindowAvg = null;
           } else if (!params.steakEnabled) {
@@ -1190,9 +1193,12 @@ export function step(state: SimState, substeps = 1) {
         if (Tsteak[ii] < TsteakMin) TsteakMin = Tsteak[ii];
       }
       if (TsteakMin >= params.steakDoneTemp) {
+        // Final halt — the "steady state" snapshot is NOT re-captured here;
+        // it was taken at first steady (steak drop). state.steadyAtTime
+        // marks the simulation's halting moment (cooked-through), distinct
+        // from the first-steady time exposed via state.steakDroppedAt.
         state.steady = true;
         state.steadyAtTime = state.time;
-        state.tempProfileSteady = state.T.slice();
       }
     }
 

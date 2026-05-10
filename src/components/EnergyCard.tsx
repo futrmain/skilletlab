@@ -130,8 +130,10 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
   const cookingDone = state?.cookingReadyAtTime != null;
   const cookingTime = cookingDone ? (state?.cookingReadyAtTime ?? 0) : t;
   const steakActive = state?.steakActive === true;
-  const steadyDone = state?.steady === true;
-  const steadyTime = steadyDone ? (state?.steadyAtTime ?? 0) : t;
+  // First steady — see SimCard's ProgressIndicators for rationale.
+  const firstSteadyAt = state?.steakDroppedAt ?? state?.steadyAtTime ?? null;
+  const steadyDone = firstSteadyAt != null;
+  const steadyTime = steadyDone ? firstSteadyAt : t;
   return (
     <div className="flex flex-col gap-0.5 font-mono">
       <span
@@ -144,8 +146,8 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
         className={steadyDone ? "text-emerald-400" : "text-muted-foreground"}
         title={
           steakActive
-            ? "Steak cooked throughout — the coldest cell reached the done temperature"
-            : "avg(T_edge) per heater on/off cycle changed by ≤ 2% from the previous cycle"
+            ? "Pan first reached its limit-cycle steady state and the steak was dropped"
+            : "avg(min(T_center, T_edge)) over the last sliding window changed by ≤ 2% from the previous window"
         }
       >
         ● Steady state = {steadyTime.toFixed(1)}s

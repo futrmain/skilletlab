@@ -24,6 +24,10 @@ const COL = {
   min: "oklch(0.78 0.18 220)", // blue
   maillard: "rgba(255, 200, 90, 0.7)",
   searing: "rgba(255, 110, 90, 0.8)",
+  // Vertical milestone markers (sim-event timestamps).
+  ready: "rgba(110, 220, 180, 0.7)", // teal — pan ready to cook
+  steady: "rgba(160, 220, 110, 0.7)", // lime — steady state
+  flipped: "rgba(190, 150, 230, 0.75)", // purple — steak flipped
 };
 
 interface HoverData {
@@ -129,6 +133,28 @@ export function TempHistoryChart({
     drawMarker(ctx, pad.l, pad.l + w, yOf(maillardC), COL.maillard, `Maillard ${maillardC}°`);
     drawMarker(ctx, pad.l, pad.l + w, yOf(searingC), COL.searing, `Sear ${searingC}°`);
 
+    // vertical milestone markers — only drawn when the milestone has latched
+    // and falls inside the visible window. Labels are rendered vertically,
+    // anchored at the bottom of the plot area, on the left side of the line.
+    const yPlotTop = pad.t;
+    const yPlotBot = pad.t + h;
+    const inWindow = (t: number) => t >= t0 - 1e-9 && t <= tHi + 1e-9;
+    const tReady = state?.cookingReadyAtTime ?? null;
+    // "Steady" here means the FIRST steady state — the moment the pan
+    // reaches its limit cycle and the steak gets dropped (when steak is
+    // enabled), or the limit-cycle convergence (when no steak).
+    const tSteady = state?.steakDroppedAt ?? state?.steadyAtTime ?? null;
+    const tFlipped = state?.steakFlippedAt ?? null;
+    if (tReady != null && inWindow(tReady)) {
+      drawVMarker(ctx, xOf(tReady), yPlotTop, yPlotBot, COL.ready, `Ready ${tReady.toFixed(0)}s`);
+    }
+    if (tFlipped != null && inWindow(tFlipped)) {
+      drawVMarker(ctx, xOf(tFlipped), yPlotTop, yPlotBot, COL.flipped, `Flip ${tFlipped.toFixed(0)}s`);
+    }
+    if (tSteady != null && inWindow(tSteady)) {
+      drawVMarker(ctx, xOf(tSteady), yPlotTop, yPlotBot, COL.steady, `Steady ${tSteady.toFixed(0)}s`);
+    }
+
     if (hist.length >= 2) {
       // Draw order matters: T_edge can coincide with T_center when the heater
       // is a ring (until heat reaches both extremes). Paint T_edge last so its
@@ -224,6 +250,35 @@ function drawMarker(
   ctx.fillStyle = color;
   ctx.font = "9px ui-monospace, monospace";
   ctx.fillText(label, x0 + 4, y - 2);
+}
+
+function drawVMarker(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y0: number,
+  y1: number,
+  color: string,
+  label: string,
+) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(x, y0);
+  ctx.lineTo(x, y1);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // Vertical label, anchored at the bottom of the line, sitting on the LEFT
+  // side of the line. Text reads from bottom to top.
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.font = "9px ui-monospace, monospace";
+  ctx.translate(x - 2, y1 - 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "bottom";
+  ctx.fillText(label, 0, 0);
+  ctx.restore();
 }
 
 function drawSeries(
