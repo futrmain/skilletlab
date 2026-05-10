@@ -22,6 +22,7 @@ import {
   type TimePicker,
 } from "@/components/CompareCharts";
 import { PanView } from "@/components/PanView";
+import { formatSimTime } from "@/lib/format";
 
 export const Route = createFileRoute("/")({
   component: Index,
@@ -809,7 +810,7 @@ function MilestoneSection({
                 <span className="text-foreground">{e.label}</span>
               </span>
               <span className="text-muted-foreground font-mono">
-                {tAt != null ? `t = ${tAt.toFixed(1)}s` : "—"}
+                {tAt != null ? `t = ${formatSimTime(tAt)}` : "—"}
               </span>
               {snap && st ? (
                 <PanView

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { type SimState, type HistorySample } from "@/lib/simulation";
+import { formatSimTime } from "@/lib/format";
 import { ChartHoverOverlay } from "./ChartHoverOverlay";
 
 interface Props {
@@ -123,8 +124,8 @@ export function TempHistoryChart({
 
     // x axis labels — show the actual window endpoints.
     ctx.fillStyle = "rgba(220,220,220,0.6)";
-    ctx.fillText(`${t0.toFixed(1)} s`, pad.l - 2, height - 6);
-    ctx.fillText(`${tHi.toFixed(1)} s`, pad.l + w - 36, height - 6);
+    ctx.fillText(formatSimTime(t0), pad.l - 2, height - 6);
+    ctx.fillText(formatSimTime(tHi), pad.l + w - 36, height - 6);
 
     const xOf = (t: number) => pad.l + ((t - t0) / tSpan) * w;
     const yOf = (Tc: number) => pad.t + h * (1 - (Tc - yMinC) / (yMaxC - yMinC));
@@ -146,13 +147,13 @@ export function TempHistoryChart({
     const tSteady = state?.steakDroppedAt ?? state?.steadyAtTime ?? null;
     const tFlipped = state?.steakFlippedAt ?? null;
     if (tReady != null && inWindow(tReady)) {
-      drawVMarker(ctx, xOf(tReady), yPlotTop, yPlotBot, COL.ready, `Ready ${tReady.toFixed(0)}s`);
+      drawVMarker(ctx, xOf(tReady), yPlotTop, yPlotBot, COL.ready, `Ready ${formatSimTime(tReady)}`);
     }
     if (tFlipped != null && inWindow(tFlipped)) {
-      drawVMarker(ctx, xOf(tFlipped), yPlotTop, yPlotBot, COL.flipped, `Flip ${tFlipped.toFixed(0)}s`);
+      drawVMarker(ctx, xOf(tFlipped), yPlotTop, yPlotBot, COL.flipped, `Flip ${formatSimTime(tFlipped)}`);
     }
     if (tSteady != null && inWindow(tSteady)) {
-      drawVMarker(ctx, xOf(tSteady), yPlotTop, yPlotBot, COL.steady, `Steady ${tSteady.toFixed(0)}s`);
+      drawVMarker(ctx, xOf(tSteady), yPlotTop, yPlotBot, COL.steady, `Steady ${formatSimTime(tSteady)}`);
     }
 
     if (hist.length >= 2) {
@@ -216,7 +217,7 @@ export function TempHistoryChart({
             y: d.yOf(s.Tcenter - 273.15),
             content: (
               <div className="space-y-0.5">
-                <div className="text-muted-foreground">t = {s.t.toFixed(1)} s</div>
+                <div className="text-muted-foreground">t = {formatSimTime(s.t)}</div>
                 <div style={{ color: COL.center }}>
                   center = {(s.Tcenter - 273.15).toFixed(1)}°C
                 </div>

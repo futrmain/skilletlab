@@ -11,6 +11,7 @@ import { ProfileChart, type ProfileExtra } from "./ProfileChart";
 import { TempHistoryChart } from "./TempHistoryChart";
 import { type SimState } from "@/lib/simulation";
 import { type PanConfig, type HeaterConfig } from "@/lib/configs";
+import { formatSimTime } from "@/lib/format";
 import { Pause, Play, RotateCcw, X } from "lucide-react";
 
 interface Props {
@@ -188,7 +189,7 @@ export function SimCard({
       <div className="space-y-1 text-xs">
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">
-            t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
+            t = <span className="font-mono text-primary">{formatSimTime(state?.time ?? 0)}</span>
           </span>
         </div>
         <ProgressIndicators state={state} />
@@ -272,14 +273,14 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
         className={cookingDone ? "text-emerald-400" : "text-muted-foreground"}
         title="T_edge (cell at the cooking-zone outer edge) ≥ 150°C (Maillard threshold)"
       >
-        ● Cooking ready = {cookingTime.toFixed(1)}s
+        ● Cooking ready = {formatSimTime(cookingTime)}
       </span>
       {steakEnabled && (
         <span
           className={steakActive ? "text-emerald-400" : "text-muted-foreground"}
           title="Sim time at which the pan reached its first steady state and the steak was dropped"
         >
-          ● Steak dropped = {steakTime.toFixed(1)}s
+          ● Steak dropped = {formatSimTime(steakTime)}
         </span>
       )}
       {steakEnabled && (
@@ -287,7 +288,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
           className={steakFlipped ? "text-emerald-400" : "text-muted-foreground"}
           title="Sim time at which the steak's centre cell first reached 25°C and the steak was flipped (axial T reversal)"
         >
-          ● Steak flipped = {steakFlipTime.toFixed(1)}s
+          ● Steak flipped = {formatSimTime(steakFlipTime)}
         </span>
       )}
       <span
@@ -298,7 +299,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
             : "avg(min(T_center, T_edge)) over the last sliding window changed by ≤ 2% from the previous window"
         }
       >
-        ● Steak cooked = {steadyTime.toFixed(1)}s
+        ● Steak cooked = {formatSimTime(steadyTime)}
       </span>
     </div>
   );

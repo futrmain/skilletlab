@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { type SimState } from "@/lib/simulation";
+import { formatSimTime } from "@/lib/format";
 import { ChartHoverOverlay } from "./ChartHoverOverlay";
 
 export interface CompareEntry {
@@ -252,7 +253,7 @@ export function CompareCookingReadyBars({ entries, width = 720, height = 280 }: 
       ctx.lineTo(pad.l + w, y);
       ctx.stroke();
       const v = maxTime - (maxTime * i) / 5;
-      ctx.fillText(`${v.toFixed(0)} s`, 4, y + 3);
+      ctx.fillText(formatSimTime(v), 4, y + 3);
     }
 
     if (data.length === 0) return;
@@ -269,7 +270,7 @@ export function CompareCookingReadyBars({ entries, width = 720, height = 280 }: 
         ctx.fillStyle = "rgba(240,240,240,0.95)";
         ctx.font = "11px ui-monospace, monospace";
         ctx.textAlign = "center";
-        ctx.fillText(`${d.time.toFixed(1)} s`, x + barW / 2, y - 4);
+        ctx.fillText(formatSimTime(d.time), x + barW / 2, y - 4);
       } else {
         // Placeholder: faint outlined slot + "—" so the user sees the entry exists.
         ctx.strokeStyle = d.e.color;
@@ -476,7 +477,7 @@ export function CompareReadyVsSteadyScatter({ entries, width = 520, height = 360
       ctx.lineTo(pad.l + w, y);
       ctx.stroke();
       const v = aMax - aRange * (i / 5);
-      ctx.fillText(`${v.toFixed(0)} s`, 4, y + 3);
+      ctx.fillText(formatSimTime(v), 4, y + 3);
     }
     for (let i = 0; i <= 5; i++) {
       const x = pad.l + (w * i) / 5;
@@ -807,7 +808,7 @@ export function CompareMilestoneTimeBars({
         ctx.fillStyle = "rgba(240,240,240,0.95)";
         ctx.font = "11px ui-monospace, monospace";
         ctx.textAlign = "center";
-        ctx.fillText(`${d.v.toFixed(1)} s`, x + barW / 2, y - 4);
+        ctx.fillText(formatSimTime(d.v), x + barW / 2, y - 4);
       } else {
         ctx.strokeStyle = d.e.color;
         ctx.setLineDash([3, 3]);

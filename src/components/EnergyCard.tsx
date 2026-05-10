@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import { type SimState } from "@/lib/simulation";
 import { type PanConfig, type HeaterConfig } from "@/lib/configs";
+import { formatSimTime } from "@/lib/format";
 import { X } from "lucide-react";
 import { ChartHoverOverlay } from "./ChartHoverOverlay";
 
@@ -98,7 +99,7 @@ export function EnergyCard({
       <div className="space-y-1 text-xs">
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">
-            t = <span className="font-mono text-primary">{(state?.time ?? 0).toFixed(1)}s</span>
+            t = <span className="font-mono text-primary">{formatSimTime(state?.time ?? 0)}</span>
           </span>
           <Legend />
         </div>
@@ -140,7 +141,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
         className={cookingDone ? "text-emerald-400" : "text-muted-foreground"}
         title="T_edge (cell at the cooking-zone outer edge) ≥ 150°C (Maillard threshold)"
       >
-        ● Cooking ready = {cookingTime.toFixed(1)}s
+        ● Cooking ready = {formatSimTime(cookingTime)}
       </span>
       <span
         className={steadyDone ? "text-emerald-400" : "text-muted-foreground"}
@@ -150,7 +151,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
             : "avg(min(T_center, T_edge)) over the last sliding window changed by ≤ 2% from the previous window"
         }
       >
-        ● Steady state = {steadyTime.toFixed(1)}s
+        ● Steady state = {formatSimTime(steadyTime)}
       </span>
     </div>
   );
@@ -216,7 +217,7 @@ function EnergyChart({
 
     const hist = state?.history ?? [];
     if (hist.length < 2) {
-      drawAxes(ctx, pad, w, h, "0", "0", "0 s", "0 s");
+      drawAxes(ctx, pad, w, h, "0", "0", "0s", "0s");
       hoverRef.current = null;
       return;
     }
@@ -235,7 +236,7 @@ function EnergyChart({
       });
     }
     if (power.length < 2) {
-      drawAxes(ctx, pad, w, h, "0", "0", "0 s", "0 s");
+      drawAxes(ctx, pad, w, h, "0", "0", "0s", "0s");
       hoverRef.current = null;
       return;
     }
@@ -250,7 +251,7 @@ function EnergyChart({
     }
     if (yMax < 1) yMax = 1;
 
-    drawAxes(ctx, pad, w, h, `${(yMax / 1000).toFixed(2)} kW`, "0", `${tMax.toFixed(1)} s`, "0 s");
+    drawAxes(ctx, pad, w, h, `${(yMax / 1000).toFixed(2)} kW`, "0", formatSimTime(tMax), "0s");
 
     const xOf = (t: number) => pad.l + (t / tMax) * w;
     const yOf = (e: number) => pad.t + h * (1 - e / yMax);
@@ -298,7 +299,7 @@ function EnergyChart({
             y: d.yOf(s.eIn),
             content: (
               <div className="space-y-0.5">
-                <div className="text-muted-foreground">t = {s.t.toFixed(1)} s</div>
+                <div className="text-muted-foreground">t = {formatSimTime(s.t)}</div>
                 <div style={{ color: COL.input }}>input = {fmt(s.eIn)}</div>
                 <div style={{ color: COL.stored }}>stored = {fmt(s.eStored)}</div>
                 <div style={{ color: COL.conv }}>conv = {fmt(s.eConv)}</div>
@@ -351,7 +352,7 @@ function ResidualChart({
 
     const hist = state?.history ?? [];
     if (hist.length < 2) {
-      drawAxes(ctx, pad, w, h, "—", "—", "0 s", "0 s");
+      drawAxes(ctx, pad, w, h, "—", "—", "0s", "0s");
       hoverRef.current = null;
       return;
     }
@@ -371,7 +372,7 @@ function ResidualChart({
       points.push({ t: s.t, lr });
     }
     if (!Number.isFinite(logMin) || !Number.isFinite(logMax)) {
-      drawAxes(ctx, pad, w, h, "—", "—", `${tMax.toFixed(1)} s`, "0 s");
+      drawAxes(ctx, pad, w, h, "—", "—", formatSimTime(tMax), "0s");
       hoverRef.current = null;
       return;
     }
@@ -389,7 +390,7 @@ function ResidualChart({
       h,
       `1e${logMax.toFixed(0)}`,
       `1e${logMin.toFixed(0)}`,
-      `${tMax.toFixed(1)} s`,
+      formatSimTime(tMax),
       "0 s",
     );
 
@@ -462,7 +463,7 @@ function ResidualChart({
             y: d.yOf(s.lr),
             content: (
               <div className="space-y-0.5">
-                <div className="text-muted-foreground">t = {s.t.toFixed(1)} s</div>
+                <div className="text-muted-foreground">t = {formatSimTime(s.t)}</div>
                 <div style={{ color: "oklch(0.85 0.02 230)" }}>|residual| = {r.toExponential(2)} J</div>
               </div>
             ),
@@ -512,7 +513,7 @@ function MaxDeltaTChart({
 
     const hist = state?.history ?? [];
     if (hist.length < 2) {
-      drawAxes(ctx, pad, w, h, "0", "0", "0 s", "0 s");
+      drawAxes(ctx, pad, w, h, "0", "0", "0s", "0s");
       hoverRef.current = null;
       return;
     }
@@ -523,7 +524,7 @@ function MaxDeltaTChart({
     // Round up
     yMax = Math.max(1, Math.ceil(yMax * 1.1));
 
-    drawAxes(ctx, pad, w, h, `${yMax.toFixed(1)} K`, "0", `${tMax.toFixed(1)} s`, "0 s");
+    drawAxes(ctx, pad, w, h, `${yMax.toFixed(1)} K`, "0", formatSimTime(tMax), "0s");
 
     const xOf = (t: number) => pad.l + (t / tMax) * w;
     const yOf = (v: number) => pad.t + h * (1 - v / yMax);
@@ -579,7 +580,7 @@ function MaxDeltaTChart({
             y: d.yOf(s.maxDeltaT),
             content: (
               <div className="space-y-0.5">
-                <div className="text-muted-foreground">t = {s.t.toFixed(1)} s</div>
+                <div className="text-muted-foreground">t = {formatSimTime(s.t)}</div>
                 <div style={{ color: "oklch(0.78 0.18 75)" }}>
                   max |ΔT| = {s.maxDeltaT.toFixed(2)} K
                 </div>
