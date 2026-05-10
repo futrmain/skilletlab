@@ -19,10 +19,11 @@ export interface HeaterConfig {
   setpointLow: number; // °C — heater turns on when center top-surface T ≤ this
 }
 
-const L = (name: string, thickness: number): Layer => ({
+const L = (name: string, thickness: number, basePlate?: boolean): Layer => ({
   name,
   thickness,
   ...MATERIALS[name],
+  ...(basePlate ? { basePlate: true } : {}),
 });
 
 export const PAN_TEMPLATES: PanConfig[] = [
@@ -62,11 +63,17 @@ export const PAN_TEMPLATES: PanConfig[] = [
     layers: [L("Carbon Steel", 0.0025)],
   },
   {
-    id: "tpl-aluminum",
-    name: "Aluminum Nonstick 28cm",
+    id: "ikea-365",
+    name: "IKEA 365+",
     diameter: 0.28,
     rimHeight: 0.08,
-    layers: [L("Aluminum", 0.0035)],
+    layers: [
+      
+      L("Stainless 304", 0.0004, true),
+      L("Aluminum", 0.0022, true),
+      L("Stainless 304", 0.0004, true),
+      L("Stainless 304", 0.00184),
+    ],
   },
 ];
 

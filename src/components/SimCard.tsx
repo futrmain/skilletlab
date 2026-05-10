@@ -296,7 +296,7 @@ function ProgressIndicators({ state }: { state: SimState | null }) {
             : "avg(min(T_center, T_edge)) over the last sliding window changed by ≤ 2% from the previous window"
         }
       >
-        ● Steady state = {steadyTime.toFixed(1)}s
+        ● Steak cooked = {steadyTime.toFixed(1)}s
       </span>
     </div>
   );
