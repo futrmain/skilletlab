@@ -26,16 +26,6 @@ import { formatSimTime } from "@/lib/format";
 
 export const Route = createFileRoute("/")({
   component: Index,
-  head: () => ({
-    meta: [
-      { title: "Skillet — Frying Pan Heat Simulator" },
-      {
-        name: "description",
-        content:
-          "Browser-based axisymmetric heat diffusion simulator for multi-layer frying pans on circular heaters. Compare configurations side by side.",
-      },
-    ],
-  }),
 });
 
 interface SimSlot {
