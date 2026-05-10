@@ -18,6 +18,9 @@ interface Props {
   // the chart falls back to r[N-1] which is the last cell-center, leaving a
   // half-cell gap to the actual outer edge of the pan.
   rOuter?: number;
+  // Cooking-edge radius (m). When supplied and < rOuter, draws a dashed
+  // vertical line marking the start of the rim flange.
+  rCooking?: number;
   // Per-tick signal (e.g. state.time) so the canvas redraws even when the
   // T/r typed-array references stay stable (their contents mutate in place).
   tick?: number;
@@ -46,6 +49,7 @@ export function ProfileChart({
   width = 380,
   height = 180,
   rOuter,
+  rCooking,
   tick,
   extras,
 }: Props) {
@@ -88,6 +92,22 @@ export function ProfileChart({
     ctx.fillText("0", pad.l - 2, height - 6);
     ctx.fillText(`${(rMax * 100).toFixed(1)} cm`, pad.l + w - 36, height - 6);
 
+    // Rim marker — dashed vertical line at the cooking-edge radius.
+    if (rCooking && rCooking > 0 && rCooking < rMax) {
+      const xRim = pad.l + (rCooking / rMax) * w;
+      ctx.strokeStyle = "rgba(220, 220, 220, 0.45)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(xRim, pad.t);
+      ctx.lineTo(xRim, pad.t + h);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(220, 220, 220, 0.65)";
+      ctx.font = "9px ui-monospace, monospace";
+      ctx.fillText("rim", xRim + 3, pad.t + 9);
+    }
+
     // Milestone snapshots — drawn before the live curve so the live one sits
     // on top. Slightly thinner, no transparency tricks; their colors are
     // already chosen to be distinguishable from the primary amber.
@@ -117,7 +137,7 @@ export function ProfileChart({
       plotArea: { x0: pad.l, x1: pad.l + w, y0: pad.t, y1: pad.t + h },
       extras: safeExtras,
     };
-  }, [T, r, tMin, tMax, width, height, rOuter, tick, safeExtras]);
+  }, [T, r, tMin, tMax, width, height, rOuter, rCooking, tick, safeExtras]);
 
   return (
     <div className="relative inline-block" style={{ width, height }}>

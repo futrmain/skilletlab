@@ -220,6 +220,7 @@ export function SimCard({
             tMin={tMinK}
             tMax={tMaxK}
             rOuter={pan.diameter / 2 + pan.rimHeight}
+            rCooking={pan.diameter / 2}
             tick={state?.time}
             width={260}
             height={180}
