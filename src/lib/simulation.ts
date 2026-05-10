@@ -161,6 +161,8 @@ export interface SimState {
   // Top-row T snapshots captured at three milestones, used by the Compare tab.
   tempProfileReady: Float64Array | null; // captured when cookingReadyAtTime latches
   tempProfileSteady: Float64Array | null; // top-row T at first-steady (= steak drop, or limit-cycle convergence with no steak)
+  tempProfileFlipped: Float64Array | null; // captured when the steak is flipped (axial T reversal)
+  tempProfileCooked: Float64Array | null; // captured when the steak is cooked through (final halt)
   tempProfileLocalMin: Float64Array | null; // captured at running-min T_center during steak phase
   localMinAfterSteakAtTime: number | null;
   localMinTcenter: number; // running min — Infinity until first sample during steak phase
@@ -502,6 +504,8 @@ export function initSim(params: SimParams): SimState {
     cookingReadyAtTime: null,
     tempProfileReady: null,
     tempProfileSteady: null,
+    tempProfileFlipped: null,
+    tempProfileCooked: null,
     tempProfileLocalMin: null,
     localMinAfterSteakAtTime: null,
     localMinTcenter: Infinity,
@@ -1181,6 +1185,7 @@ export function step(state: SimState, substeps = 1) {
         }
         state.steakFlipped = true;
         state.steakFlippedAt = state.time;
+        state.tempProfileFlipped = state.T.slice();
       }
     }
 
@@ -1199,6 +1204,7 @@ export function step(state: SimState, substeps = 1) {
         // from the first-steady time exposed via state.steakDroppedAt.
         state.steady = true;
         state.steadyAtTime = state.time;
+        state.tempProfileCooked = state.T.slice();
       }
     }
 

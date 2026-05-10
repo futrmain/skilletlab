@@ -7,7 +7,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PanView } from "./PanView";
-import { ProfileChart } from "./ProfileChart";
+import { ProfileChart, type ProfileExtra } from "./ProfileChart";
 import { TempHistoryChart } from "./TempHistoryChart";
 import { type SimState } from "@/lib/simulation";
 import { type PanConfig, type HeaterConfig } from "@/lib/configs";
@@ -82,6 +82,35 @@ export function SimCard({
   let peakC = -Infinity;
   for (let i = 0; i < Tarr.length; i++) if (Tarr[i] > peakC) peakC = Tarr[i];
   peakC = (Number.isFinite(peakC) ? peakC : initialTempK) - 273.15;
+
+  // Milestone snapshots overlaid on the radial profile. Colors match the
+  // vertical milestone markers on the time-history chart so the two views
+  // read the same.
+  const profileExtras: ProfileExtra[] = [];
+  if (state?.tempProfileReady)
+    profileExtras.push({
+      T: state.tempProfileReady,
+      color: "rgba(110, 220, 180, 0.7)",
+      label: "Ready",
+    });
+  if (state?.tempProfileSteady)
+    profileExtras.push({
+      T: state.tempProfileSteady,
+      color: "rgba(160, 220, 110, 0.7)",
+      label: "Steady",
+    });
+  if (state?.tempProfileFlipped)
+    profileExtras.push({
+      T: state.tempProfileFlipped,
+      color: "rgba(190, 150, 230, 0.75)",
+      label: "Flipped",
+    });
+  if (state?.tempProfileCooked)
+    profileExtras.push({
+      T: state.tempProfileCooked,
+      color: "rgba(230, 130, 110, 0.8)",
+      label: "Cooked",
+    });
 
   return (
     <section className="panel p-5 space-y-4 min-w-[340px] xl:min-w-[680px] flex-1">
@@ -194,6 +223,7 @@ export function SimCard({
             tick={state?.time}
             width={260}
             height={180}
+            extras={profileExtras}
           />
         </div>
         <div className="space-y-1 lg:col-span-2">
