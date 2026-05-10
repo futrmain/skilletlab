@@ -7,6 +7,12 @@ export interface PanConfig {
   diameter: number; // m — cooking-surface diameter (heater stays inside this)
   rimHeight: number; // m — radial flange past the cooking surface (the pan's rim)
   layers: Layer[];
+  // Fraction (0..1) of the rim's net top-face radiative loss that is
+  // re-injected as a uniform flux source on the cooking surface. The rim
+  // still cools at the full radiative rate; this just describes how much of
+  // that radiated energy stays inside the pan instead of escaping to ambient.
+  // Optional for backward compatibility with old saved pans (defaults to 0.5).
+  rimReturnFraction?: number;
 }
 
 export interface HeaterConfig {

@@ -211,78 +211,102 @@ export function PanEditor({
                 max={20}
                 onChange={(v) => updatePan(p.id, { rimHeight: v / 100 })}
               />
+              <Field
+                label="Rim radiation return (%)"
+                value={(p.rimReturnFraction ?? 0.5) * 100}
+                step={5}
+                min={0}
+                max={100}
+                onChange={(v) =>
+                  updatePan(p.id, {
+                    rimReturnFraction: Math.max(0, Math.min(1, v / 100)),
+                  })
+                }
+              />
               <div className="text-xs text-muted-foreground">
                 Total thickness:{" "}
                 <span className="text-primary font-bold">{totalMM.toFixed(2)} mm</span>
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <div className="label-tag">Layers (bottom → top)</div>
+                  <div className="label-tag">Layers (top → bottom)</div>
                   <Button size="sm" variant="ghost" onClick={() => addLayer(p.id)}>
                     <Plus className="w-3 h-3 mr-1" /> Add
                   </Button>
                 </div>
-                {p.layers.map((l, i) => {
-                  const canBasePlate = i === 0 || p.layers[i - 1]?.basePlate === true;
-                  const isBasePlate = l.basePlate === true;
-                  return (
-                    <div
-                      key={i}
-                      className="rounded-md border border-border bg-input/40 p-2 space-y-2"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground w-4">{i + 1}</span>
-                        <Select value={l.name} onValueChange={(v) => setMaterial(p.id, i, v)}>
-                          <SelectTrigger className="h-7 text-xs flex-1">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {Object.keys(MATERIALS).map((m) => (
-                              <SelectItem key={m} value={m}>
-                                {m}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          onClick={() => removeLayer(p.id, i)}
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </Button>
-                      </div>
-                      <Field
-                        label="Thickness (mm)"
-                        value={l.thickness * 1000}
-                        step={0.1}
-                        min={0.05}
-                        max={20}
-                        onChange={(v) => updateLayer(p.id, i, { thickness: v / 1000 })}
-                      />
-                      <label
-                        className={`flex items-center gap-2 text-xs ${
-                          canBasePlate
-                            ? "text-foreground cursor-pointer"
-                            : "text-muted-foreground/60 cursor-not-allowed"
-                        }`}
-                        title={
-                          canBasePlate
-                            ? "Stem layer that stops at the cooking radius (no rim)"
-                            : "Enable base plate on the layer below first"
-                        }
+                {/* Display order matches the physical pan: cooking surface at
+                    the top of the list, base at the bottom. The numbering
+                    (1 = bottom-most) and the underlying p.layers[] ordering
+                    are unchanged — we just iterate in reverse for layout. */}
+                {p.layers
+                  .map((_, k) => p.layers.length - 1 - k)
+                  .map((i) => {
+                    const l = p.layers[i];
+                    const canBasePlate = i === 0 || p.layers[i - 1]?.basePlate === true;
+                    const isBasePlate = l.basePlate === true;
+                    const eps = l.emissivity ?? MATERIALS[l.name]?.emissivity ?? 0.9;
+                    return (
+                      <div
+                        key={i}
+                        className="rounded-md border border-border bg-input/40 p-2 space-y-2"
                       >
-                        <Checkbox
-                          checked={isBasePlate}
-                          disabled={!canBasePlate}
-                          onCheckedChange={(v) => toggleBasePlate(p.id, i, v === true)}
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground w-4">{i + 1}</span>
+                          <Select value={l.name} onValueChange={(v) => setMaterial(p.id, i, v)}>
+                            <SelectTrigger className="h-7 text-xs flex-1">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Object.keys(MATERIALS).map((m) => (
+                                <SelectItem key={m} value={m}>
+                                  {m}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            onClick={() => removeLayer(p.id, i)}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </div>
+                        <Field
+                          label="Thickness (mm)"
+                          value={l.thickness * 1000}
+                          step={0.1}
+                          min={0.05}
+                          max={20}
+                          onChange={(v) => updateLayer(p.id, i, { thickness: v / 1000 })}
                         />
-                        <span>Base plate</span>
-                      </label>
-                    </div>
-                  );
-                })}
+                        <label
+                          className={`flex items-center gap-2 text-xs ${
+                            canBasePlate
+                              ? "text-foreground cursor-pointer"
+                              : "text-muted-foreground/60 cursor-not-allowed"
+                          }`}
+                          title={
+                            canBasePlate
+                              ? "Stem layer that stops at the cooking radius (no rim)"
+                              : "Enable base plate on the layer below first"
+                          }
+                        >
+                          <Checkbox
+                            checked={isBasePlate}
+                            disabled={!canBasePlate}
+                            onCheckedChange={(v) => toggleBasePlate(p.id, i, v === true)}
+                          />
+                          <span>Base plate</span>
+                        </label>
+                        <div className="text-[10px] text-muted-foreground font-mono leading-snug">
+                          λ = {l.k.toFixed(1)} W/(m·K) · ε = {eps.toFixed(2)} · ρ ={" "}
+                          {l.rho.toFixed(0)} kg/m³ · cp = {l.cp.toFixed(0)} J/(kg·K)
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             </section>
           );

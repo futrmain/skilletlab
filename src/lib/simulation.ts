@@ -78,6 +78,7 @@ export interface Layer {
 export interface SimParams {
   panRadius: number; // m — cooking-surface radius (heater stays inside this)
   rimHeight: number; // m — radial rim past the cooking edge (flat flange exposed to air on both sides)
+  rimReturnFraction: number; // 0..1 — fraction of rim top-face net radiation re-injected as a uniform flux on the cooking surface
   layers: Layer[];
   heaterRadius: number; // m — mean radius of the heater ring
   heaterThickness: number; // m — radial band width of the heater ring
@@ -657,6 +658,10 @@ export function step(state: SimState, substeps = 1) {
     // When the top row is itself part of the base-plate stem (jBase === Nz,
     // i.e. every layer is base-plate), rim cells of the top row are void; we
     // zero their Robin coefficient so they contribute nothing.
+    // Also accumulate the rim's net radiative power leaving its top face —
+    // a fraction `rimReturnFraction` of this is re-injected as a uniform
+    // flux on the cooking surface (see qBackPerArea below).
+    let P_rim_rad = 0;
     {
       const topRowVoid = Nz - 1 < jBase; // only true when jBase === Nz
       for (let i = 0; i < Nr; i++) {
@@ -669,8 +674,16 @@ export function step(state: SimState, substeps = 1) {
         const hRad = epsTop * SIGMA * (Tn * Tn + Tamb * Tamb) * (Tn + Tamb);
         hTopBuf[i] = (hConv + hRad) * ringArea[i]; // W/K
         TnTopBuf[i] = Tn;
+        if (isExt[i]) {
+          P_rim_rad += hRad * ringArea[i] * (Tn - Tamb);
+        }
       }
     }
+    // Recapture flux density (W/m²) — uniform across the cooking surface.
+    // π·panRadius² == Σ ringArea[0..nInner-1] (cell edges snap exactly).
+    const aCooking = Math.PI * params.panRadius * params.panRadius;
+    const qBackPerArea =
+      aCooking > 0 ? (params.rimReturnFraction * P_rim_rad) / aCooking : 0;
     // Bottom face of rim cells in the wide slab: at j = jBase. When
     // jBase === 0 this is the pan's actual bottom, matching the pre-base-plate
     // behaviour. When jBase > 0 this is the underside of the wide slab where
@@ -784,6 +797,11 @@ export function step(state: SimState, substeps = 1) {
             rhs -= hTopBuf[i] * T2D[idx];
             rhs += hTopBuf[i] * Tamb;
           }
+          // Recaptured rim radiation: uniform flux source on every cooking-
+          // zone top cell (i < nInner), regardless of steak state.
+          if (i < nInner && qBackPerArea !== 0) {
+            rhs += qBackPerArea * ringArea[i];
+          }
         }
         if (isBot) {
           if (heaterOn && heatedArea[i] > 0) {
@@ -864,6 +882,10 @@ export function step(state: SimState, substeps = 1) {
             rhs -= Qc;
           } else {
             rhs += hTopBuf[i] * Tamb;
+          }
+          // Recaptured rim radiation (same source applied in both halves).
+          if (i < nInner && qBackPerArea !== 0) {
+            rhs += qBackPerArea * ringArea[i];
           }
         }
         if (isBot) {
@@ -1019,6 +1041,7 @@ export function step(state: SimState, substeps = 1) {
     {
       const skip = state.steakActive ? steakNr : 0;
       const topMax = Nz - 1 < jBase ? nInner : Nr;
+      const fRet = params.rimReturnFraction;
       for (let i = skip; i < topMax; i++) {
         const Tn = TnTopBuf[i];
         const Tnp1 = T2D[topRowOff + i];
@@ -1026,7 +1049,11 @@ export function step(state: SimState, substeps = 1) {
         const A = ringArea[i];
         const hRad = (hTopBuf[i] - hConv * A) / A;
         eLossConv += hConv * dTavg * A * dt;
-        eLossRad += hRad * dTavg * A * dt;
+        // For rim cells, only (1 − rimReturnFraction) of the radiation
+        // actually escapes to ambient — the rest is recaptured by the
+        // cooking surface (counted as an internal source there).
+        const radFactor = isExt[i] ? 1 - fRet : 1;
+        eLossRad += radFactor * hRad * dTavg * A * dt;
       }
     }
     // Bottom face loss for rim cells only — at the underside of the wide

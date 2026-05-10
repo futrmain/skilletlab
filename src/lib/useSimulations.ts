@@ -6,6 +6,7 @@ export interface SimInput {
   key: string;
   panRadius: number;
   rimHeight: number;
+  rimReturnFraction: number;
   layers: Layer[];
   heaterRadius: number;
   heaterThickness: number;

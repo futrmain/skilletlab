@@ -116,6 +116,7 @@ function Index() {
           key: s.key,
           panRadius: pan.diameter / 2,
           rimHeight: pan.rimHeight,
+          rimReturnFraction: pan.rimReturnFraction ?? 0.5,
           layers: pan.layers,
           heaterRadius: Math.min(heater.diameter / 2, pan.diameter / 2),
           heaterThickness: heater.thickness,
