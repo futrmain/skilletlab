@@ -237,6 +237,7 @@ export interface HistorySample {
   Tmax: number; // K — max top-surface temperature
   Tedge: number; // K — top-surface cell at the cooking-zone outer edge (i = nInner − 1)
   maxDeltaT: number; // K — max |T_{n+1} − T_n| over any cell in this step (peak across substeps)
+  Ttop: Float64Array; // length Nr — snapshot of the top-row T at this sample time (used by click-to-pin)
 }
 
 export function effectiveProps(layers: Layer[]) {
@@ -562,10 +563,15 @@ export function initSim(params: SimParams): SimState {
         Tmax: initialTemp,
         Tedge: initialTemp,
         maxDeltaT: 0,
+        Ttop: (() => {
+          const a = new Float64Array(Nr);
+          a.fill(initialTemp);
+          return a;
+        })(),
       },
     ],
     historyMax: 4000,
-    historyIntervalSec: 2.0,
+    historyIntervalSec: 1.0,
     lastHistoryTime: 0,
   };
 }
@@ -1291,6 +1297,7 @@ export function step(state: SimState, substeps = 1) {
       Tmax,
       Tedge,
       maxDeltaT,
+      Ttop: state.T.slice(),
     });
     state.lastHistoryTime = state.time;
   }

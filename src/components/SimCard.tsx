@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -58,29 +58,13 @@ export function SimCard({
   const pan = pans.find((p) => p.id === panId);
   const heater = heaters.find((h) => h.id === heaterId);
 
-  // Click-to-pin support. The worker only ships HistorySample summary stats,
-  // so we keep our own ring of (time, top-row T) snapshots captured from
-  // incoming `state` updates and look up the nearest one when the user
-  // clicks the time-history chart.
-  const ttopHistoryRef = useRef<{ t: number; Ttop: Float64Array }[]>([]);
+  // Click-to-pin uses the worker's own history (sim-time-driven cadence, so
+  // resolution is independent of how fast the wall clock runs the sim).
   const [pinned, setPinned] = useState<{ t: number; Ttop: Float64Array } | null>(null);
+  // Clear the pin if the sim is reset / re-initialised (state.time < pinned.t).
   useEffect(() => {
-    if (!state) return;
-    const t = state.time;
-    const buf = ttopHistoryRef.current;
-    // Detect a sim reset (time went backwards or to 0) and clear the buffer
-    // + any active pin.
-    if (buf.length > 0 && t < buf[buf.length - 1].t) {
-      ttopHistoryRef.current = [];
-      setPinned(null);
-    }
-    // Append the snapshot if time advanced.
-    if (buf.length === 0 || t > buf[buf.length - 1].t) {
-      // Hard cap on memory: ~2000 entries × Nr × 8 bytes.
-      if (buf.length >= 2000) buf.shift();
-      buf.push({ t, Ttop: state.T.slice() });
-    }
-  }, [state, state?.time]);
+    if (pinned && state && state.time + 1e-6 < pinned.t) setPinned(null);
+  }, [state, state?.time, pinned]);
 
   if (!pan || !heater) {
     return (
@@ -91,18 +75,19 @@ export function SimCard({
   }
 
   const handlePickTime = (t: number) => {
-    const buf = ttopHistoryRef.current;
-    if (buf.length === 0) return;
+    const hist = state?.history;
+    if (!hist || hist.length === 0) return;
     let lo = 0;
-    let hi = buf.length - 1;
+    let hi = hist.length - 1;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (buf[mid].t < t) lo = mid + 1;
+      if (hist[mid].t < t) lo = mid + 1;
       else hi = mid;
     }
     let idx = lo;
-    if (lo > 0 && Math.abs(buf[lo - 1].t - t) < Math.abs(buf[lo].t - t)) idx = lo - 1;
-    setPinned({ t: buf[idx].t, Ttop: buf[idx].Ttop });
+    if (lo > 0 && Math.abs(hist[lo - 1].t - t) < Math.abs(hist[lo].t - t)) idx = lo - 1;
+    const s = hist[idx];
+    setPinned({ t: s.t, Ttop: s.Ttop });
   };
 
   const Tarr = pinned?.Ttop ?? state?.T ?? new Float64Array([initialTempK]);
