@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Play, Pause, RotateCcw, Plus, Flame } from "lucide-react";
-import { usePanConfigs, useHeaterConfigs, uid } from "@/lib/configs";
+import { usePanConfigs, useHeaterConfigs, uid, PAN_TEMPLATES } from "@/lib/configs";
 import { PanEditor, HeaterEditor } from "@/components/ConfigEditors";
 import { SimCard } from "@/components/SimCard";
 import { EnergyCard } from "@/components/EnergyCard";
@@ -65,47 +65,46 @@ function Index() {
   const [steakInitialTempC, setSteakInitialTempC] = useState(5);
   const [steakDoneTempC, setSteakDoneTempC] = useState(55);
 
-  const [slots, setSlots] = useState<SimSlot[]>(() => [
-    {
+  // Default to the first 4 pan templates so each card starts on a distinct
+  // pan even if the user has reshuffled or renamed their saved pans —
+  // filledSlots below reconciles these against the live `pans` list.
+  const [slots, setSlots] = useState<SimSlot[]>(() =>
+    [0, 1, 2, 3].map((i) => ({
       key: uid(),
-      panId: "tpl-tri-ply",
+      panId: PAN_TEMPLATES[i]?.id ?? PAN_TEMPLATES[0]?.id ?? "",
       heaterId: "tpl-induction",
       running: false,
       resetTick: 0,
-    },
-    {
-      key: uid(),
-      panId: "tpl-cast-iron",
-      heaterId: "tpl-induction",
-      running: false,
-      resetTick: 0,
-    },
-    {
-      key: uid(),
-      panId: "tpl-carbon-steel",
-      heaterId: "tpl-induction",
-      running: false,
-      resetTick: 0,
-    },
-    {
-      key: uid(),
-      panId: "tpl-copper-core",
-      heaterId: "tpl-induction",
-      running: false,
-      resetTick: 0,
-    },
-  ]);
+    })),
+  );
 
   // Default-fill missing pan/heater ids when configs become available
-  const filledSlots = slots.map((s) => ({
-    ...s,
-    panId: pans.find((p) => p.id === s.panId)?.id ?? pans[0]?.id ?? "",
-    heaterId:
-      heaters.find((h) => h.id === s.heaterId)?.id ??
-      heaters.find((h) => h.id === "tpl-induction")?.id ??
-      heaters[0]?.id ??
-      "",
-  }));
+  // When a slot's stored panId no longer matches any current pan (e.g. the
+  // user has renamed/replaced pans in their saved config), fall back to the
+  // first pan that no other slot has already claimed — this keeps the four
+  // default cards on distinct pans rather than collapsing to pans[0].
+  const filledSlots = (() => {
+    const used = new Set<string>();
+    return slots.map((s, idx) => {
+      let panId = pans.find((p) => p.id === s.panId)?.id;
+      if (!panId) {
+        panId =
+          pans.find((p) => !used.has(p.id))?.id ??
+          pans[idx % Math.max(1, pans.length)]?.id ??
+          "";
+      }
+      if (panId) used.add(panId);
+      return {
+        ...s,
+        panId,
+        heaterId:
+          heaters.find((h) => h.id === s.heaterId)?.id ??
+          heaters.find((h) => h.id === "tpl-induction")?.id ??
+          heaters[0]?.id ??
+          "",
+      };
+    });
+  })();
 
   const inputs: SimInput[] = useMemo(() => {
     return filledSlots.flatMap((s) => {

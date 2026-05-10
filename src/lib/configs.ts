@@ -27,11 +27,25 @@ const L = (name: string, thickness: number): Layer => ({
 
 export const PAN_TEMPLATES: PanConfig[] = [
   {
-    id: "tpl-tri-ply",
-    name: "Tri-Ply Stainless 28cm",
+    id: "All-Clad D3",
+    name: "All-Clad D3 28cm",
     diameter: 0.28,
     rimHeight: 0.08,
-    layers: [L("Stainless 304", 0.0005), L("Aluminum", 0.004), L("Stainless 304", 0.0005)],
+    layers: [L("Stainless 304", 0.00045), L("Aluminum", 0.0017), L("Stainless 304", 0.00045)],
+  },
+  {
+    id: "Falk Classical (Cu)",
+    name: "Falk Classical (Cu)",
+    diameter: 0.28,
+    rimHeight: 0.08,
+    layers: [L("Copper", 0.0023),  L("Stainless 304", 0.0002)],
+  },
+  {
+    id: "Falk Cu Coeur",
+    name: "Falk Cu Coeur",
+    diameter: 0.28,
+    rimHeight: 0.08,
+    layers: [L("Stainless 304", 0.0004), L("Copper", 0.0019)],
   },
   {
     id: "tpl-cast-iron",
@@ -46,18 +60,6 @@ export const PAN_TEMPLATES: PanConfig[] = [
     diameter: 0.28,
     rimHeight: 0.08,
     layers: [L("Carbon Steel", 0.0025)],
-  },
-  {
-    id: "tpl-copper-core",
-    name: "Copper Core 28cm",
-    diameter: 0.28,
-    rimHeight: 0.08,
-    layers: [
-      L("Stainless 304", 0.0005),
-      L("Copper", 0.002),
-      L("Aluminum", 0.001),
-      L("Stainless 304", 0.0005),
-    ],
   },
   {
     id: "tpl-aluminum",
