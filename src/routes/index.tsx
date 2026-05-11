@@ -5,7 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Play, Pause, RotateCcw, Plus, Flame } from "lucide-react";
+import { Play, Pause, RotateCcw, Plus, Flame, Github } from "lucide-react";
 import { usePanConfigs, useHeaterConfigs, uid, PAN_TEMPLATES } from "@/lib/configs";
 import { PanEditor, HeaterEditor } from "@/components/ConfigEditors";
 import { SimCard } from "@/components/SimCard";
@@ -285,6 +285,16 @@ function Index() {
             directly in your browser.
           </p>
         </div>
+        <a
+          href="https://github.com/futrmain/skilletlab"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md border border-border px-3 py-1.5"
+          title="View source on GitHub"
+        >
+          <Github className="w-4 h-4" />
+          <span>github.com/futrmain/skilletlab</span>
+        </a>
       </header>
 
       <Tabs defaultValue="simulate" className="w-full">
