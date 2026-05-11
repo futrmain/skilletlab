@@ -275,10 +275,10 @@ function Index() {
       <header className="mb-8 flex items-end justify-between gap-4 flex-wrap">
         <div>
           <div className="label-tag mb-2 flex items-center gap-2">
-            <Flame className="w-3 h-3" /> Thermal Lab · v2
+            <Flame className="w-3 h-3" /> Fry simulation · v1
           </div>
           <h1 className="text-3xl md:text-5xl font-bold tracking-tight">
-            Skillet<span className="text-primary">.</span>
+            Skilletlab<span className="text-primary">.</span>
           </h1>
           <p className="text-sm text-muted-foreground mt-2 max-w-xl">
             Define pans and heaters, then run side-by-side axisymmetric heat diffusion simulations
