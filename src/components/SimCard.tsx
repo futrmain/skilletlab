@@ -12,6 +12,7 @@ import { ProfileChart, type ProfileExtra } from "./ProfileChart";
 import { TempHistoryChart } from "./TempHistoryChart";
 import { type SimState } from "@/lib/simulation";
 import { type PanConfig, type HeaterConfig } from "@/lib/configs";
+import { derivePanProperties } from "@/lib/pan-properties";
 import { formatSimTime } from "@/lib/format";
 import { Pause, Play, Pin, RotateCcw, X } from "lucide-react";
 
@@ -217,6 +218,9 @@ export function SimCard({
         </span>
       </div>
 
+      <PanDerivedPropsLine pan={pan} />
+
+
       <div className="space-y-1 text-xs">
         <div className="flex items-center justify-between">
           <span className="text-muted-foreground">
@@ -379,6 +383,16 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
     <div className="rounded-md border border-border bg-input/40 py-2">
       <div className="text-[10px] text-muted-foreground uppercase tracking-wider">{label}</div>
       <div className={`font-mono text-base ${accent ? "text-primary font-bold" : ""}`}>{value}</div>
+    </div>
+  );
+}
+
+function PanDerivedPropsLine({ pan }: { pan: PanConfig }) {
+  const { mass, heatCapacity, bulkConductivity } = derivePanProperties(pan);
+  return (
+    <div className="text-[10px] text-muted-foreground font-mono leading-snug">
+      mass = {mass.toFixed(2)} kg · inertia = {(heatCapacity / 1000).toFixed(2)} kJ/K · λ_bulk ={" "}
+      {bulkConductivity.toFixed(0)} W/(m·K)
     </div>
   );
 }

@@ -18,6 +18,7 @@ import {
   HEATER_TEMPLATES,
   uid,
 } from "@/lib/configs";
+import { derivePanProperties } from "@/lib/pan-properties";
 
 function Field({
   label,
@@ -170,6 +171,7 @@ export function PanEditor({
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {pans.map((p) => {
           const totalMM = p.layers.reduce((s, l) => s + l.thickness, 0) * 1000;
+          const derived = derivePanProperties(p);
           return (
             <section key={p.id} className="panel p-4 space-y-3">
               <div className="flex items-center gap-2">
@@ -226,6 +228,11 @@ export function PanEditor({
               <div className="text-xs text-muted-foreground">
                 Total thickness:{" "}
                 <span className="text-primary font-bold">{totalMM.toFixed(2)} mm</span>
+              </div>
+              <div className="text-[10px] text-muted-foreground font-mono leading-snug">
+                mass = {derived.mass.toFixed(2)} kg · inertia ={" "}
+                {(derived.heatCapacity / 1000).toFixed(2)} kJ/K · λ_bulk ={" "}
+                {derived.bulkConductivity.toFixed(0)} W/(m·K)
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
