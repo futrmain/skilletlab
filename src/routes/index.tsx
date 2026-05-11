@@ -285,16 +285,24 @@ function Index() {
             directly in your browser.
           </p>
         </div>
-        <a
-          href="https://github.com/futrmain/skilletlab"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md border border-border px-3 py-1.5"
-          title="View source on GitHub"
-        >
-          <Github className="w-4 h-4" />
-          <span>github.com/futrmain/skilletlab</span>
-        </a>
+        <div className="flex flex-col items-end gap-1">
+          <a
+            href="https://github.com/futrmain/skilletlab"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors rounded-md border border-border px-3 py-1.5"
+            title="View source on GitHub"
+          >
+            <Github className="w-4 h-4" />
+            <span>github.com/futrmain/skilletlab</span>
+          </a>
+          <span
+            className="text-[10px] text-muted-foreground/70 font-mono"
+            title="Build version (git describe). 'dirty' = built with uncommitted changes."
+          >
+            {__APP_VERSION__}
+          </span>
+        </div>
       </header>
 
       <Tabs defaultValue="simulate" className="w-full">
