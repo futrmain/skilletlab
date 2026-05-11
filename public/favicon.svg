@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <radialGradient id="heat" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#fff2cc" />
+      <stop offset="35%" stop-color="#f8b14e" />
+      <stop offset="70%" stop-color="#d24a2a" />
+      <stop offset="100%" stop-color="#3a1d3a" />
+    </radialGradient>
+  </defs>
+  <rect width="64" height="64" rx="10" fill="#0e1422" />
+  <circle cx="32" cy="32" r="24" fill="url(#heat)" />
+  <circle
+    cx="32"
+    cy="32"
+    r="14"
+    fill="none"
+    stroke="rgba(255,255,255,0.35)"
+    stroke-width="1"
+    stroke-dasharray="3 2"
+  />
+</svg>

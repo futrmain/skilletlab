@@ -275,7 +275,7 @@ function Index() {
       <header className="mb-8 flex items-end justify-between gap-4 flex-wrap">
         <div>
           <div className="label-tag mb-2 flex items-center gap-2">
-            <Flame className="w-3 h-3" /> Fry simulation · v1
+            <Flame className="w-3 h-3" /> skilletlab.dev
           </div>
           <h1 className="text-3xl md:text-5xl font-bold tracking-tight">
             Skilletlab<span className="text-primary">.</span>
