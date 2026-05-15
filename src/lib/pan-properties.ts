@@ -24,7 +24,7 @@ export function derivePanProperties(pan: PanConfig): PanDerivedProps {
   let mass = 0;
   let heatCapacity = 0;
   let sumT = 0;
-  let sumTOverK = 0;
+  let sumKT = 0;
 
   for (const layer of pan.layers) {
     const area = layer.basePlate ? A_cooking : A_outer;
@@ -32,10 +32,10 @@ export function derivePanProperties(pan: PanConfig): PanDerivedProps {
     mass += layer.rho * volume;
     heatCapacity += layer.rho * layer.cp * volume;
     sumT += layer.thickness;
-    sumTOverK += layer.thickness / Math.max(layer.k, 1e-12);
+    sumKT += layer.thickness * layer.k;
   }
 
-  const bulkConductivity = sumTOverK > 0 ? sumT / sumTOverK : 0;
+  const bulkConductivity = sumT > 0 ? sumKT / sumT : 0;
 
   return { mass, heatCapacity, bulkConductivity };
 }
